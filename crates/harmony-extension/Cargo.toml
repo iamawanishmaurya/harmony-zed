@@ -11,7 +11,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Zed extension SDK
-zed_extension_api = "0.1"
+zed_extension_api = "0.5.0"
 
 # Config parsing
 toml = "0.8"

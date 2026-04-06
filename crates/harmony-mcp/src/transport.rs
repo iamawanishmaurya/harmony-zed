@@ -1,7 +1,13 @@
 use std::sync::{Arc, Mutex};
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 use harmony_memory::store::MemoryStore;
 use crate::tools;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StdioMessageFormat {
+    ContentLength,
+    JsonLine,
+}
 
 /// Run the MCP server on stdin/stdout using JSON-RPC 2.0 protocol.
 pub async fn run_stdio_server(store: Arc<Mutex<MemoryStore>>) -> anyhow::Result<()> {
@@ -11,20 +17,20 @@ pub async fn run_stdio_server(store: Arc<Mutex<MemoryStore>>) -> anyhow::Result<
     let mut reader = stdin.lock();
     let mut writer = stdout.lock();
 
+    debug_log(&format!("stdio server started pid={}", std::process::id()));
+
     loop {
-        // Read Content-Length header
-        let content_length = match read_content_length(&mut reader) {
-            Ok(len) => len,
-            Err(_) => break, // EOF or broken pipe
+        let (body_str, message_format) = match read_stdio_message(&mut reader) {
+            Ok(message) => {
+                debug_log(&format!("resolved message format={message_format:?}", message_format = message.1));
+                message
+            }
+            Err(error) => {
+                debug_log(&format!("read_stdio_message ended: {error}"));
+                break;
+            }
         };
-
-        // Read the JSON body
-        let mut body = vec![0u8; content_length];
-        if reader.read_exact(&mut body).is_err() {
-            break;
-        }
-
-        let body_str = String::from_utf8_lossy(&body).to_string();
+        debug_log(&format!("received body: {}", body_str));
         tracing::debug!("Received: {}", body_str);
 
         // Parse and handle the request
@@ -32,18 +38,20 @@ pub async fn run_stdio_server(store: Arc<Mutex<MemoryStore>>) -> anyhow::Result<
 
         if let Some(response) = response {
             let response_str = serde_json::to_string(&response)?;
-            let header = format!("Content-Length: {}\r\n\r\n", response_str.len());
-            writer.write_all(header.as_bytes())?;
-            writer.write_all(response_str.as_bytes())?;
+            write_stdio_response(&mut writer, message_format, &response_str)?;
             writer.flush()?;
+            debug_log(&format!("sent response: {}", response_str));
             tracing::debug!("Sent: {}", response_str);
+        } else {
+            debug_log("request produced no response");
         }
     }
 
+    debug_log("stdio server exiting");
     Ok(())
 }
 
-// ── TCP IPC Server (Windows fallback) ─────────────────────────────────────────
+// TCP IPC Server (Windows fallback)
 
 /// Start a TCP IPC server on 127.0.0.1:17432 for Windows.
 ///
@@ -56,7 +64,7 @@ pub async fn start_ipc_server(
     store: Arc<Mutex<MemoryStore>>,
 ) -> anyhow::Result<()> {
     use tokio::net::TcpListener;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
     let addr = "127.0.0.1:17432";
     let listener = TcpListener::bind(addr).await?;
@@ -82,23 +90,9 @@ pub async fn start_ipc_server(
             loop {
                 // Read Content-Length header
                 let mut header_line = String::new();
-                let content_length = loop {
-                    header_line.clear();
-                    match reader.read_line(&mut header_line).await {
-                        Ok(0) => return, // Connection closed
-                        Ok(_) => {}
-                        Err(_) => return,
-                    }
-                    let trimmed = header_line.trim();
-                    if trimmed.is_empty() { continue; }
-                    if let Some(len_str) = trimmed.strip_prefix("Content-Length: ") {
-                        if let Ok(len) = len_str.parse::<usize>() {
-                            // Read empty line after header
-                            let mut empty = String::new();
-                            let _ = reader.read_line(&mut empty).await;
-                            break len;
-                        }
-                    }
+                let content_length = match read_async_content_length(&mut reader, &mut header_line).await {
+                    Ok(len) => len,
+                    Err(_) => return,
                 };
 
                 // Read JSON body
@@ -131,7 +125,7 @@ pub async fn start_ipc_server(
     store: Arc<Mutex<MemoryStore>>,
 ) -> anyhow::Result<()> {
     use tokio::net::UnixListener;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
     let socket_path = project_root.join(".harmony").join("harmony.sock");
     if let Some(parent) = socket_path.parent() {
@@ -155,22 +149,9 @@ pub async fn start_ipc_server(
             loop {
                 // Read Content-Length header
                 let mut header_line = String::new();
-                let content_length = loop {
-                    header_line.clear();
-                    match reader.read_line(&mut header_line).await {
-                        Ok(0) => return,
-                        Ok(_) => {}
-                        Err(_) => return,
-                    }
-                    let trimmed = header_line.trim();
-                    if trimmed.is_empty() { continue; }
-                    if let Some(len_str) = trimmed.strip_prefix("Content-Length: ") {
-                        if let Ok(len) = len_str.parse::<usize>() {
-                            let mut empty = String::new();
-                            let _ = reader.read_line(&mut empty).await;
-                            break len;
-                        }
-                    }
+                let content_length = match read_async_content_length(&mut reader, &mut header_line).await {
+                    Ok(len) => len,
+                    Err(_) => return,
                 };
 
                 let mut body = vec![0u8; content_length];
@@ -193,26 +174,120 @@ pub async fn start_ipc_server(
     }
 }
 
-// ── Shared Protocol ───────────────────────────────────────────────────────────
+// Shared Protocol
 
-fn read_content_length<R: BufRead>(reader: &mut R) -> anyhow::Result<usize> {
+fn read_stdio_message<R: BufRead>(reader: &mut R) -> anyhow::Result<(String, StdioMessageFormat)> {
     let mut header_line = String::new();
+    let mut content_length = None;
+
     loop {
         header_line.clear();
         let bytes_read = reader.read_line(&mut header_line)?;
         if bytes_read == 0 {
             return Err(anyhow::anyhow!("EOF reached"));
         }
+
         let trimmed = header_line.trim();
+        debug_log(&format!("header line: {:?}", trimmed));
         if trimmed.is_empty() {
+            if let Some(length) = content_length {
+                let mut body = vec![0u8; length];
+                reader.read_exact(&mut body)?;
+                let body_str = String::from_utf8(body)
+                    .map_err(|error| anyhow::anyhow!("invalid utf-8 body: {error}"))?;
+                return Ok((body_str, StdioMessageFormat::ContentLength));
+            }
             continue;
         }
-        if let Some(len_str) = trimmed.strip_prefix("Content-Length: ") {
-            let len: usize = len_str.parse()?;
-            // Read the empty line after headers
-            let mut empty = String::new();
-            reader.read_line(&mut empty)?;
-            return Ok(len);
+
+        if content_length.is_none() && looks_like_json_message(trimmed) {
+            return Ok((trimmed.to_string(), StdioMessageFormat::JsonLine));
+        }
+
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("Content-Length") {
+                let len: usize = value.trim().parse()?;
+                content_length = Some(len);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn read_async_content_length<R>(
+    reader: &mut tokio::io::BufReader<R>,
+    header_line: &mut String,
+) -> anyhow::Result<usize>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+
+    let mut content_length = None;
+
+    loop {
+        header_line.clear();
+        let bytes_read = reader.read_line(header_line).await?;
+        if bytes_read == 0 {
+            return match content_length {
+                Some(length) => Ok(length),
+                None => Err(anyhow::anyhow!("EOF reached")),
+            };
+        }
+
+        let trimmed = header_line.trim();
+        debug_log(&format!("async header line: {:?}", trimmed));
+        if trimmed.is_empty() {
+            if let Some(length) = content_length {
+                return Ok(length);
+            }
+            continue;
+        }
+
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("Content-Length") {
+                let len: usize = value.trim().parse()?;
+                content_length = Some(len);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn read_async_content_length<R>(
+    reader: &mut tokio::io::BufReader<R>,
+    header_line: &mut String,
+) -> anyhow::Result<usize>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+
+    let mut content_length = None;
+
+    loop {
+        header_line.clear();
+        let bytes_read = reader.read_line(header_line).await?;
+        if bytes_read == 0 {
+            return match content_length {
+                Some(length) => Ok(length),
+                None => Err(anyhow::anyhow!("EOF reached")),
+            };
+        }
+
+        let trimmed = header_line.trim();
+        if trimmed.is_empty() {
+            if let Some(length) = content_length {
+                return Ok(length);
+            }
+            continue;
+        }
+
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("Content-Length") {
+                let len: usize = value.trim().parse()?;
+                content_length = Some(len);
+            }
         }
     }
 }
@@ -221,14 +296,7 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
     let request: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => {
-            return Some(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": {
-                    "code": -32700,
-                    "message": format!("Parse error: {}", e)
-                }
-            }));
+            return Some(jsonrpc_error(None, -32700, format!("Parse error: {}", e)));
         }
     };
 
@@ -238,10 +306,17 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
 
     let result = match method {
         "initialize" => {
+            let protocol_version = params
+                .get("protocolVersion")
+                .and_then(|value| value.as_str())
+                .unwrap_or("2024-11-05");
+
             Some(serde_json::json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": protocol_version,
                 "capabilities": {
-                    "tools": {}
+                    "tools": {
+                        "listChanged": false
+                    }
                 },
                 "serverInfo": {
                     "name": "harmony-memory",
@@ -249,9 +324,12 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
                 }
             }))
         }
-        "initialized" => {
+        "notifications/initialized" | "initialized" => {
             // Notification, no response needed
             return None;
+        }
+        "ping" => {
+            Some(serde_json::json!({}))
         }
         "tools/list" => {
             Some(tools::list_tools())
@@ -265,12 +343,15 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
             Some(serde_json::json!(null))
         }
         _ => {
-            Some(serde_json::json!({
-                "error": {
-                    "code": -32601,
-                    "message": format!("Method not found: {}", method)
-                }
-            }))
+            if id.is_none() {
+                return None;
+            }
+
+            return Some(jsonrpc_error(
+                id,
+                -32601,
+                format!("Method not found: {}", method),
+            ));
         }
     };
 
@@ -281,4 +362,155 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
             "result": r
         })
     })
+}
+
+fn jsonrpc_error(id: Option<serde_json::Value>, code: i32, message: String) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message
+        }
+    })
+}
+
+fn looks_like_json_message(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('{') && trimmed.ends_with('}')
+}
+
+fn write_stdio_response<W: Write>(
+    writer: &mut W,
+    message_format: StdioMessageFormat,
+    response_str: &str,
+) -> anyhow::Result<()> {
+    match message_format {
+        StdioMessageFormat::ContentLength => {
+            let header = format!("Content-Length: {}\r\n\r\n", response_str.len());
+            writer.write_all(header.as_bytes())?;
+            writer.write_all(response_str.as_bytes())?;
+        }
+        StdioMessageFormat::JsonLine => {
+            writer.write_all(response_str.as_bytes())?;
+            writer.write_all(b"\n")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn debug_log(message: &str) {
+    let Some(path) = std::env::var_os("HARMONY_MCP_DEBUG_LOG") else {
+        return;
+    };
+
+    let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis(),
+        Err(_) => 0,
+    };
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "[{timestamp}] {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        handle_request, looks_like_json_message, read_stdio_message, write_stdio_response,
+        StdioMessageFormat,
+    };
+    use std::io::Cursor;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+    use harmony_memory::store::MemoryStore;
+
+    fn test_store() -> Arc<Mutex<MemoryStore>> {
+        let store = MemoryStore::open(Path::new(":memory:")).expect("memory store");
+        Arc::new(Mutex::new(store))
+    }
+
+    #[test]
+    fn reads_content_length_with_extra_headers() {
+        let body = "{\"jsonrpc\":\"2.0\",\"id\":0}";
+        let payload = format!(
+            "Content-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let mut cursor = Cursor::new(payload.into_bytes());
+        let (body, format) = read_stdio_message(&mut cursor).expect("content length");
+        assert_eq!(format, StdioMessageFormat::ContentLength);
+        assert_eq!(body, "{\"jsonrpc\":\"2.0\",\"id\":0}");
+    }
+
+    #[test]
+    fn reads_content_length_when_header_order_varies() {
+        let body = "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"ping\"}";
+        let payload = format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let mut cursor = Cursor::new(payload.into_bytes());
+        let (body, format) = read_stdio_message(&mut cursor).expect("content length");
+        assert_eq!(format, StdioMessageFormat::ContentLength);
+        assert_eq!(body, "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"ping\"}");
+    }
+
+    #[test]
+    fn reads_json_line_messages() {
+        let payload = b"{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\"}\n";
+        let mut cursor = Cursor::new(payload.as_slice());
+        let (body, format) = read_stdio_message(&mut cursor).expect("json line");
+        assert_eq!(format, StdioMessageFormat::JsonLine);
+        assert_eq!(body, "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\"}");
+    }
+
+    #[test]
+    fn writes_json_line_responses() {
+        let mut output = Vec::new();
+        write_stdio_response(&mut output, StdioMessageFormat::JsonLine, "{\"jsonrpc\":\"2.0\"}")
+            .expect("json line response");
+        assert_eq!(String::from_utf8(output).unwrap(), "{\"jsonrpc\":\"2.0\"}\n");
+    }
+
+    #[test]
+    fn detects_json_messages() {
+        assert!(looks_like_json_message("{\"jsonrpc\":\"2.0\"}"));
+        assert!(!looks_like_json_message("Content-Length: 42"));
+    }
+
+    #[test]
+    fn initialize_echoes_requested_protocol_version() {
+        let response = handle_request(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"zed","version":"1.0.0"}}}"#,
+            &test_store(),
+        )
+        .expect("response");
+
+        assert_eq!(
+            response["result"]["protocolVersion"].as_str(),
+            Some("2025-06-18")
+        );
+        assert_eq!(
+            response["result"]["capabilities"]["tools"]["listChanged"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn notifications_initialized_does_not_emit_response() {
+        let response = handle_request(
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+            &test_store(),
+        );
+
+        assert!(response.is_none());
+    }
 }

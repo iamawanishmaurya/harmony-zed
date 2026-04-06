@@ -1,0 +1,126 @@
+# Harmony Configuration File
+# Auto-generated on first run
+
+[server]
+# HTTP server binding for IPC (sidecar <-> extension)
+host = "127.0.0.1"
+port = 9827
+timeout_ms = 30000
+
+[memory]
+# SQLite database path
+db_path = ".harmony/memory.db"
+# Max embeddings to cache in memory
+cache_size = 1000
+# Vector similarity threshold (0.0 - 1.0)
+similarity_threshold = 0.75
+
+[llm]
+# LLM backend selection: "openai", "anthropic", "github-models", "ollama", "lm-studio", "local-acp"
+backend = "github-models"
+
+# OpenAI Configuration
+[llm.openai]
+api_key = "${OPENAI_API_KEY}"
+model = "gpt-4"
+temperature = 0.3
+max_tokens = 2048
+
+# Anthropic Configuration
+[llm.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+model = "claude-3-haiku"
+temperature = 0.3
+max_tokens = 2048
+
+# GitHub Models Configuration
+[llm.github_models]
+api_key = "${GITHUB_TOKEN}"
+model = "gpt-4o"
+temperature = 0.3
+max_tokens = 2048
+
+# Ollama Configuration (local)
+[llm.ollama]
+base_url = "http://127.0.0.1:11434"
+model = "llama2"
+temperature = 0.3
+max_tokens = 2048
+
+# LM Studio Configuration (local)
+[llm.lm_studio]
+base_url = "http://127.0.0.1:1234/v1"
+model = "local-model"
+temperature = 0.3
+max_tokens = 2048
+
+[analysis]
+# Time window for detecting overlaps (milliseconds)
+overlap_window_ms = 5000
+# Enable Tree-sitter AST analysis
+enable_ast_analysis = true
+# Enable LSP-based semantic analysis
+enable_lsp_analysis = true
+# Max file size for analysis (bytes)
+max_file_size_bytes = 1048576
+
+[ui]
+# Ghost highlight color (hex)
+ghost_highlight_color = "#FFD700"
+# Pulse notification severity: "info", "warning", "critical"
+pulse_severity = "warning"
+# Show agent team panel
+show_agent_panel = true
+# Show overlap visualization
+show_ghost_highlights = true
+
+[logging]
+# Log level: "debug", "info", "warn", "error"
+level = "info"
+# Log file path (relative to .harmony directory)
+file = "harmony.log"
+# Max log file size (MB)
+max_size_mb = 10
+# Max log files to keep
+max_backups = 3
+
+[agents]
+# Default agent configuration
+[[agents.team]]
+id = "agent-1"
+name = "CodeGenAgent"
+role = "code-generator"
+model_backend = "github-models"
+enabled = true
+
+[[agents.team]]
+id = "agent-2"
+name = "ReviewAgent"
+role = "code-reviewer"
+model_backend = "github-models"
+enabled = true
+
+[[agents.team]]
+id = "agent-3"
+name = "TestAgent"
+role = "test-writer"
+model_backend = "github-models"
+enabled = false
+
+[notifications]
+# Enable Harmony Pulse notifications
+enable_pulse = true
+# Auto-dismiss pulse after (seconds, 0 = never)
+auto_dismiss_ms = 8000
+# Vibration on overlap detection
+vibrate_on_overlap = false
+
+[debugging]
+# Enable detailed logging
+verbose = false
+# Enable IPC message logging
+log_ipc = false
+# Enable analysis step logging
+log_analysis = false
+# Write shadow diffs to file
+write_shadow_diffs = false

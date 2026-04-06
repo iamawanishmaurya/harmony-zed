@@ -52,6 +52,10 @@ impl MemoryStore {
         })
     }
 
+    pub fn db_path(&self) -> &Path {
+        &self.project_db_path
+    }
+
     // ── Provenance ────────────────────────────────────────────────────────────
 
     pub fn insert_provenance_tag(&self, tag: &ProvenanceTag) -> anyhow::Result<()> {

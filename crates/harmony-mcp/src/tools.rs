@@ -10,6 +10,14 @@ pub fn list_tools() -> serde_json::Value {
     serde_json::json!({
         "tools": [
             {
+                "name": "harmony_pulse",
+                "description": "Return the current Harmony status for this project, including registered agents and pending overlaps.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
                 "name": "query_memory",
                 "description": "Semantic search for team memory. Returns relevant decisions, notes, and context.",
                 "inputSchema": {
@@ -105,6 +113,7 @@ pub fn call_tool(
     store: &Arc<Mutex<MemoryStore>>,
 ) -> serde_json::Value {
     match tool_name {
+        "harmony_pulse" => handle_harmony_pulse(store),
         "query_memory" => handle_query_memory(arguments, store),
         "add_memory" => handle_add_memory(arguments, store),
         "report_change" => handle_report_change(arguments, store),
@@ -117,6 +126,84 @@ pub fn call_tool(
             "isError": true
         }),
     }
+}
+
+fn handle_harmony_pulse(store: &Arc<Mutex<MemoryStore>>) -> serde_json::Value {
+    let store = store.lock().unwrap();
+    let db_path = store.db_path().display().to_string();
+    let project_path = infer_project_path(&db_path);
+    let overlaps = match store.get_pending_overlaps() {
+        Ok(overlaps) => overlaps,
+        Err(error) => {
+            return serde_json::json!({
+                "content": [{ "type": "text", "text": format!("Error reading pending overlaps: {}", error) }],
+                "isError": true
+            });
+        }
+    };
+    let agents = match store.get_agents() {
+        Ok(agents) => agents,
+        Err(error) => {
+            return serde_json::json!({
+                "content": [{ "type": "text", "text": format!("Error reading registered agents: {}", error) }],
+                "isError": true
+            });
+        }
+    };
+
+    let mut lines = vec![
+        "Harmony Pulse".to_string(),
+        format!("Project: {}", project_path),
+        format!("Database: {}", db_path),
+        format!("Registered agents: {}", agents.len()),
+        format!("Pending overlaps: {}", overlaps.len()),
+        String::new(),
+    ];
+
+    if overlaps.is_empty() {
+        lines.push("No active overlaps found.".to_string());
+        lines.push(
+            "Next: keep Harmony connected, make overlapping human and agent edits in the same file, then run Harmony Pulse again."
+                .to_string(),
+        );
+    } else {
+        lines.push("Active overlaps:".to_string());
+        for overlap in overlaps.iter().take(5) {
+            lines.push(format!(
+                "- {} lines {}-{}: {} vs {}",
+                overlap.file_path,
+                overlap.region_a.start_line + 1,
+                overlap.region_a.end_line + 1,
+                overlap.change_a.actor_id.0,
+                overlap.change_b.actor_id.0,
+            ));
+        }
+
+        if overlaps.len() > 5 {
+            lines.push(format!("...and {} more overlap(s).", overlaps.len() - 5));
+        }
+    }
+
+    serde_json::json!({
+        "content": [{
+            "type": "text",
+            "text": lines.join("\n")
+        }]
+    })
+}
+
+fn infer_project_path(db_path: &str) -> String {
+    let db = std::path::Path::new(db_path);
+    let parent = db.parent().unwrap_or(db);
+    let project_root = parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.eq_ignore_ascii_case(".harmony"))
+        .unwrap_or(false)
+        .then(|| parent.parent().unwrap_or(parent))
+        .unwrap_or(parent);
+
+    project_root.display().to_string()
 }
 
 fn handle_query_memory(
@@ -302,5 +389,45 @@ fn parse_namespace(s: &str) -> MemoryNamespace {
         }
     } else {
         MemoryNamespace::Shared
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{call_tool, list_tools};
+    use harmony_memory::store::MemoryStore;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    fn test_store() -> Arc<Mutex<MemoryStore>> {
+        Arc::new(Mutex::new(
+            MemoryStore::open(Path::new(":memory:")).expect("memory store"),
+        ))
+    }
+
+    #[test]
+    fn list_tools_includes_harmony_pulse() {
+        let tools = list_tools();
+        let tool_names: Vec<&str> = tools["tools"]
+            .as_array()
+            .expect("tool list")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+
+        assert!(tool_names.contains(&"harmony_pulse"));
+    }
+
+    #[test]
+    fn harmony_pulse_tool_returns_status_text() {
+        let response = call_tool("harmony_pulse", &serde_json::json!({}), &test_store());
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("text content");
+
+        assert!(text.contains("Harmony Pulse"));
+        assert!(text.contains("Database: :memory:"));
+        assert!(text.contains("Registered agents: 0"));
+        assert!(text.contains("Pending overlaps: 0"));
     }
 }

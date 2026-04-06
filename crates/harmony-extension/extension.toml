@@ -1,14 +1,15 @@
 id = "harmony"
 name = "Harmony"
-version = "0.1.0"
+version = "1.0.0"
 schema_version = 1
 description = "Intelligent mediation for parallel human + AI development"
 authors = ["Awanish Maurya <awanish@xpwnit.me>"]
 repository = "https://github.com/iamawanishmaurya/harmony-zed"
 
 [context_servers.harmony-memory]
-command = "../../target/release/harmony-mcp"
+command = "C:\\Users\\water\\Desktop\\Testing\\mmcp-windows\\Harmony\\target\\release\\harmony-mcp.exe"
 
 [slash_commands.harmony-pulse]
 description = "Check for active Harmony Agent overlaps"
 tooltip_text = "Displays overlapping human+agent edits"
+requires_argument = false
