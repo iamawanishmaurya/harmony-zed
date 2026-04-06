@@ -1,0 +1,24 @@
+[package]
+name = "harmony-analyzer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+harmony-core = { path = "../harmony-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Tree-sitter
+tree-sitter = "0.22"
+tree-sitter-typescript = "0.21"
+tree-sitter-javascript = "0.21"
+tree-sitter-rust = "0.21"
+
+# LSP client (JSON-RPC over stdio)
+lsp-types = "0.95"
+jsonrpc-core = "18.0"

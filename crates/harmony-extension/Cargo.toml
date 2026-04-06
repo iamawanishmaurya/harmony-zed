@@ -1,0 +1,17 @@
+[package]
+name = "harmony-extension"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Zed extension SDK
+zed_extension_api = "0.1"
+
+# Config parsing
+toml = "0.8"

@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "crates/harmony-core",
+    "crates/harmony-analyzer",
+    "crates/harmony-memory",
+    "crates/harmony-mcp",
+    "crates/harmony-extension",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime (native crates only — NOT in WASM extension)
+tokio = { version = "1.37", features = ["full"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID
+uuid = { version = "1.8", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client (for LLM negotiation backends)
+reqwest = { version = "0.12", features = ["json"] }
+
+[profile.release]
+opt-level = "s"      # optimize for size (WASM)
+lto = true
+strip = true

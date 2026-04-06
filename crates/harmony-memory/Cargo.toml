@@ -1,0 +1,29 @@
+[package]
+name = "harmony-memory"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+embeddings = ["fastembed"]
+
+[dependencies]
+harmony-core = { path = "../harmony-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# SQLite — bundled so no system sqlite3 required
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Local embeddings — uses ONNX runtime, downloads model on first run
+# Optional: enable with --features embeddings
+fastembed = { version = "3.8", optional = true }
+# fastembed uses BAAI/bge-small-en-v1.5 by default (~130MB, cached in ~/.cache/fastembed)
+
+[dev-dependencies]
+tempfile = "3.10"

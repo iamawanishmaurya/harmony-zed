@@ -1,0 +1,25 @@
+[package]
+name = "harmony-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+similar = "2.5"
+sha2 = "0.10"
+toml = "0.8"
+whoami = "1.5"
+
+[dev-dependencies]
+tempfile = "3.10"
+harmony-memory = { path = "../harmony-memory" }
+harmony-analyzer = { path = "../harmony-analyzer" }
+httpmock = "0.8"

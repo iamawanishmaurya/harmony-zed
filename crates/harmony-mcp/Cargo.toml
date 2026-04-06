@@ -1,0 +1,21 @@
+[package]
+name = "harmony-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "harmony-mcp"
+path = "src/main.rs"
+
+[dependencies]
+harmony-core = { path = "../harmony-core" }
+harmony-memory = { path = "../harmony-memory" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
