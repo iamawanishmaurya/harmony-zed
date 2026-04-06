@@ -8,3 +8,7 @@ repository = "https://github.com/iamawanishmaurya/harmony-zed"
 
 [context_servers.harmony-memory]
 command = "../../target/release/harmony-mcp"
+
+[slash_commands.harmony-pulse]
+description = "Check for active Harmony Agent overlaps"
+tooltip_text = "Displays overlapping human+agent edits"
