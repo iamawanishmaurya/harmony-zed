@@ -1,4 +1,3 @@
-[extension]
 id = "harmony"
 name = "Harmony"
 version = "0.1.0"
@@ -7,9 +6,5 @@ description = "Intelligent mediation for parallel human + AI development"
 authors = ["Awanish Maurya <awanish@xpwnit.me>"]
 repository = "https://github.com/iamawanishmaurya/harmony-zed"
 
-[lib]
-path = "crates/harmony-extension"
-
-[[context_servers]]
-name = "harmony-memory"
-binary = { name = "harmony-mcp", path = "crates/harmony-mcp" }
+[context_servers.harmony-memory]
+command = "../../target/release/harmony-mcp"

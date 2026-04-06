@@ -54,10 +54,15 @@ That's it. Harmony is now tracking changes in your project.
 git clone <repo-url> Harmony
 cd Harmony
 
-# Build the sidecar binary (the only thing you need to run)
+# 2. Build the sidecar binary (the only thing you need to run)
 cargo build --release -p harmony-mcp
 
-# The binary is at:
+# 3. Load into Zed (IMPORTANT)
+# Open Zed's Command Palette -> "zed: install dev extension"
+# Select this folder: /path/to/harmony-zed/crates/harmony-extension
+# (Do NOT select the root project folder, as Zed requires isolated Cargo packages)
+
+# 4. The binary is at:
 #   Windows: target\release\harmony-mcp.exe
 #   Linux:   target/release/harmony-mcp
 ```

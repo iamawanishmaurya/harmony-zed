@@ -86,6 +86,15 @@ To initialize Harmony in your current project directory:
 /path/to/harmony-zed/target/release/harmony-mcp --db-path .harmony/memory.db
 ```
 
+### Loading into Zed
+
+Zed workspaces require you to point the extension loader directly to the crate where the `extension.toml` and `Cargo.toml` reside alongside each other. Note that you CANNOT select the root folder of the repo, because it is a cargo `[workspace]`.
+
+1. Open Zed's **Command Palette** (`Ctrl + Shift + P` or `Cmd + Shift + P`)
+2. Type and select **`zed: install dev extension`**
+3. Select the nested directory: `/path/to/harmony-zed/crates/harmony-extension`
+4. Zed will mount the `extension.toml` and automatically start tracking your file changes!
+
 ### Setting up the LLM Backend
 
 Once started, Harmony generates a rich configuration file at `.harmony/config.toml`. Open this file to customize your AI model settings. 
