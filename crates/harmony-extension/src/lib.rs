@@ -109,16 +109,27 @@ impl zed::Extension for HarmonyExtension {
         let binary = Self::resolve_binary_path()?;
         let db_path = Self::resolve_db_path_for_project(project)?;
         let debug_log = Self::debug_log_path(&db_path);
+        let zed_log = Self::zed_log_path();
+        let build_snippet = Self::build_command_snippet();
+        let default_settings = serde_json::json!({
+            "db_path": Self::default_project_db_path(),
+        })
+        .to_string();
 
         Ok(Some(zed::ContextServerConfiguration {
             installation_instructions: format!(
-                "Build the native sidecar before enabling Harmony in Zed:\n\n```powershell\ncargo build --release -p harmony-mcp\n```\n\nZed now launches Harmony through the network bridge automatically when you click Configure Server.\n\nSame-network setup:\n1. On the host laptop, set `.harmony/config.toml` `[network].mode = \"host\"`\n2. On the client laptop, set `[network].mode = \"client\"` and `host_url = \"http://HOST_IP:4231\"`\n3. Click Configure Server in Zed on each machine\n4. Open the dashboard with `/harmony-dashboard`\n\nHarmony binary:\n{}\n\nHarmony database for this project:\n{}\n\nHarmony debug log:\n{}\n\nUseful slash commands after assistant edits:\n- `/harmony-sync`\n- `/harmony-sync path/to/file`\n- `/harmony-pulse`\n- `/harmony-dashboard`\n\nZed log:\nC:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log\n\nTip: after a failed Configure attempt, inspect the logs with:\n```powershell\nGet-Content -Tail 120 \"{}\"\nGet-Content -Tail 120 \"C:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log\"\n```",
+                "Build the native sidecar before enabling Harmony in Zed:\n\n```{}\n{}\n```\n\nZed now launches Harmony through the network bridge automatically when you click Configure Server.\n\nSame-network setup:\n1. On the host laptop, set `.harmony/config.toml` `[network].mode = \"host\"`\n2. On the client laptop, set `[network].mode = \"client\"` and `host_url = \"http://HOST_IP:4231\"`\n3. Click Configure Server in Zed on each machine\n4. Open the dashboard with `/harmony-dashboard`\n\nHarmony binary:\n{}\n\nHarmony database for this project:\n{}\n\nHarmony debug log:\n{}\n\nUseful slash commands after assistant edits:\n- `/harmony-sync`\n- `/harmony-sync path/to/file`\n- `/harmony-pulse`\n- `/harmony-dashboard`\n\nZed log:\n{}\n\nTip: after a failed Configure attempt, inspect the logs with:\n```{}\n{}\n{}\n```",
+                Self::shell_code_fence(),
+                build_snippet,
                 binary,
                 db_path,
                 debug_log,
-                debug_log,
+                zed_log,
+                Self::shell_code_fence(),
+                Self::tail_command(&debug_log),
+                Self::tail_command(&zed_log),
             ),
-            default_settings: "{\"db_path\": \".harmony\\\\memory.db\"}".to_string(),
+            default_settings,
             settings_schema: "{\"type\":\"object\",\"properties\":{\"db_path\":{\"type\":\"string\",\"description\":\"Database path for this project. Relative paths are resolved from the opened project root.\"}}}".to_string(),
         }))
     }
@@ -239,15 +250,22 @@ impl HarmonyExtension {
         }
     }
 
+    fn is_windows() -> bool {
+        matches!(zed::current_platform().0, zed::Os::Windows)
+    }
+
     fn compiled_repo_root() -> String {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR").replace('/', "\\");
-        Self::strip_windows_suffix(&manifest_dir, "\\crates\\harmony-extension")
+        let manifest_dir = Self::normalize_platform_path(env!("CARGO_MANIFEST_DIR"));
+        Self::strip_platform_suffix(
+            &manifest_dir,
+            &Self::normalize_platform_path("crates/harmony-extension"),
+        )
             .unwrap_or(manifest_dir)
     }
 
     fn compiled_binary_path() -> String {
-        Self::join_windows(
-            &Self::join_windows(&Self::compiled_repo_root(), "target\\release"),
+        Self::join_path(
+            &Self::join_path(&Self::compiled_repo_root(), "target/release"),
             &Self::binary_name(),
         )
     }
@@ -284,14 +302,14 @@ impl HarmonyExtension {
         }
 
         let repo_root = Self::repo_root_from_binary(binary).unwrap_or_else(Self::compiled_repo_root);
-        Self::join_windows(&repo_root, ".harmony\\memory.db")
+        Self::join_path(&repo_root, ".harmony/memory.db")
     }
 
     fn resolve_db_path_for_worktree(worktree: Option<&zed::Worktree>, binary: &str) -> String {
         if let Some(worktree) = worktree {
-            return Self::join_windows(
-                &Self::normalize_windows_path(&worktree.root_path()),
-                ".harmony\\memory.db",
+            return Self::join_path(
+                &Self::normalize_platform_path(&worktree.root_path()),
+                ".harmony/memory.db",
             );
         }
 
@@ -303,7 +321,7 @@ impl HarmonyExtension {
             return Ok(path);
         }
 
-        Ok(".harmony\\memory.db".to_string())
+        Ok(Self::default_project_db_path())
     }
 
     fn db_path_from_context_server_settings(
@@ -321,51 +339,108 @@ impl HarmonyExtension {
     }
 
     fn repo_root_from_binary(binary: &str) -> Option<String> {
-        let normalized = binary.replace('/', "\\");
-        let suffix = format!("\\target\\release\\{}", Self::binary_name());
-        Self::strip_windows_suffix(&normalized, &suffix)
+        let normalized = Self::normalize_platform_path(binary);
+        let suffix = Self::normalize_platform_path(&format!("target/release/{}", Self::binary_name()));
+        Self::strip_platform_suffix(&normalized, &suffix)
     }
 
     fn context_server_launcher_path(binary: &str) -> String {
         let root = Self::repo_root_from_binary(binary).unwrap_or_else(Self::compiled_repo_root);
-        Self::join_windows(&root, "run-harmony-mcp.cmd")
+        Self::join_path(&root, "run-harmony-mcp.cmd")
     }
 
-    fn strip_windows_suffix(path: &str, suffix: &str) -> Option<String> {
-        let path_lower = path.to_ascii_lowercase();
-        let suffix_lower = suffix.to_ascii_lowercase();
-        path_lower
-            .ends_with(&suffix_lower)
-            .then(|| path[..path.len() - suffix.len()].to_string())
+    fn strip_platform_suffix(path: &str, suffix: &str) -> Option<String> {
+        let normalized_path = Self::normalize_platform_path(path);
+        let normalized_suffix = Self::normalize_platform_path(suffix);
+
+        if Self::is_windows() {
+            let path_lower = normalized_path.to_ascii_lowercase();
+            let suffix_lower = normalized_suffix.to_ascii_lowercase();
+            path_lower
+                .ends_with(&suffix_lower)
+                .then(|| normalized_path[..normalized_path.len() - normalized_suffix.len()].to_string())
+        } else {
+            normalized_path
+                .ends_with(&normalized_suffix)
+                .then(|| normalized_path[..normalized_path.len() - normalized_suffix.len()].to_string())
+        }
     }
 
-    fn join_windows(base: &str, tail: &str) -> String {
+    fn join_path(base: &str, tail: &str) -> String {
         let trimmed_base = base.trim_end_matches(['\\', '/']);
         let trimmed_tail = tail.trim_start_matches(['\\', '/']);
-        format!("{trimmed_base}\\{trimmed_tail}")
+        if trimmed_base.is_empty() {
+            return Self::normalize_platform_path(trimmed_tail);
+        }
+
+        format!("{trimmed_base}{}{trimmed_tail}", Self::path_separator())
     }
 
-    fn normalize_windows_path(path: &str) -> String {
-        path.replace('/', "\\")
+    fn normalize_platform_path(path: &str) -> String {
+        if Self::is_windows() {
+            path.replace('/', "\\")
+        } else {
+            path.replace('\\', "/")
+        }
     }
 
-    fn parent_windows(path: &str) -> Option<String> {
-        let normalized = path.replace('/', "\\");
+    fn parent_path(path: &str) -> Option<String> {
+        let normalized = Self::normalize_platform_path(path);
         normalized
-            .rfind('\\')
+            .rfind(Self::path_separator())
             .map(|index| normalized[..index].to_string())
     }
 
     fn debug_log_path(db_path: &str) -> String {
-        Self::parent_windows(db_path)
-            .map(|dir| Self::join_windows(&dir, "mcp-debug.log"))
-            .unwrap_or_else(|| ".harmony\\mcp-debug.log".to_string())
+        Self::parent_path(db_path)
+            .map(|dir| Self::join_path(&dir, "mcp-debug.log"))
+            .unwrap_or_else(|| Self::normalize_platform_path(".harmony/mcp-debug.log"))
     }
 
     fn launch_log_path(db_path: &str) -> String {
-        Self::parent_windows(db_path)
-            .map(|dir| Self::join_windows(&dir, "context-server-launch.log"))
-            .unwrap_or_else(|| ".harmony\\context-server-launch.log".to_string())
+        Self::parent_path(db_path)
+            .map(|dir| Self::join_path(&dir, "context-server-launch.log"))
+            .unwrap_or_else(|| Self::normalize_platform_path(".harmony/context-server-launch.log"))
+    }
+
+    fn path_separator() -> char {
+        if Self::is_windows() {
+            '\\'
+        } else {
+            '/'
+        }
+    }
+
+    fn default_project_db_path() -> String {
+        Self::normalize_platform_path(".harmony/memory.db")
+    }
+
+    fn shell_code_fence() -> &'static str {
+        if Self::is_windows() {
+            "powershell"
+        } else {
+            "bash"
+        }
+    }
+
+    fn build_command_snippet() -> &'static str {
+        "cargo build --release -p harmony-mcp"
+    }
+
+    fn zed_log_path() -> String {
+        if Self::is_windows() {
+            "C:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log".to_string()
+        } else {
+            "~/.local/state/zed/logs/Zed.log".to_string()
+        }
+    }
+
+    fn tail_command(path: &str) -> String {
+        if Self::is_windows() {
+            format!("Get-Content -Tail 120 \"{path}\"")
+        } else {
+            format!("tail -n 120 \"{path}\"")
+        }
     }
 }
 
