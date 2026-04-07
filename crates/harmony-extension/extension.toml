@@ -1,6 +1,6 @@
 id = "harmony"
 name = "Harmony"
-version = "1.0.0"
+version = "0.2.0"
 schema_version = 1
 description = "Intelligent mediation for parallel human + AI development"
 authors = ["Awanish Maurya <awanish@xpwnit.me>"]

@@ -574,6 +574,136 @@ impl MemoryStore {
 
     // ── Memory Records ────────────────────────────────────────────────────────
 
+    pub fn insert_file_sync_event(&self, event: &FileSyncEvent) -> anyhow::Result<FileSyncEvent> {
+        let entry_kind = serde_json::to_string(&event.entry_kind)?;
+        let change_kind = serde_json::to_string(&event.change_kind)?;
+
+        self.conn.execute(
+            "INSERT INTO file_sync_events (
+                id, relative_path, entry_kind, change_kind, content_base64,
+                content_sha256, size_bytes, actor_id, machine_name, machine_ip,
+                detected_at, impact_summary
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                event.id.to_string(),
+                event.relative_path,
+                entry_kind,
+                change_kind,
+                event.content_base64,
+                event.content_sha256,
+                event.size_bytes as i64,
+                event.actor_id.0,
+                event.machine_name,
+                event.machine_ip,
+                event.detected_at.to_rfc3339(),
+                event.impact_summary,
+            ],
+        )?;
+
+        let mut inserted = event.clone();
+        inserted.seq = self.conn.last_insert_rowid();
+        Ok(inserted)
+    }
+
+    pub fn get_recent_file_sync_events(&self, limit: u32) -> anyhow::Result<Vec<FileSyncEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, id, relative_path, entry_kind, change_kind, content_base64,
+                    content_sha256, size_bytes, actor_id, machine_name, machine_ip,
+                    detected_at, impact_summary
+             FROM file_sync_events
+             ORDER BY seq DESC
+             LIMIT ?1",
+        )?;
+
+        let mut events = self.query_file_sync_events(&mut stmt, params![limit as i64])?;
+        events.reverse();
+        Ok(events)
+    }
+
+    pub fn get_file_sync_events_since(
+        &self,
+        since_seq: i64,
+        limit: u32,
+    ) -> anyhow::Result<Vec<FileSyncEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, id, relative_path, entry_kind, change_kind, content_base64,
+                    content_sha256, size_bytes, actor_id, machine_name, machine_ip,
+                    detected_at, impact_summary
+             FROM file_sync_events
+             WHERE seq > ?1
+             ORDER BY seq ASC
+             LIMIT ?2",
+        )?;
+
+        self.query_file_sync_events(&mut stmt, params![since_seq, limit as i64])
+    }
+
+    fn query_file_sync_events<P: rusqlite::Params>(
+        &self,
+        stmt: &mut rusqlite::Statement,
+        params: P,
+    ) -> anyhow::Result<Vec<FileSyncEvent>> {
+        let rows = stmt
+            .query_map(params, |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut events = Vec::with_capacity(rows.len());
+        for (
+            seq,
+            id_str,
+            relative_path,
+            entry_kind_str,
+            change_kind_str,
+            content_base64,
+            content_sha256,
+            size_bytes,
+            actor_id_str,
+            machine_name,
+            machine_ip,
+            detected_at_str,
+            impact_summary,
+        ) in rows
+        {
+            events.push(FileSyncEvent {
+                seq,
+                id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
+                relative_path,
+                entry_kind: serde_json::from_str(&entry_kind_str)
+                    .unwrap_or(FileSyncEntryKind::File),
+                change_kind: serde_json::from_str(&change_kind_str)
+                    .unwrap_or(FileSyncChangeKind::Updated),
+                content_base64,
+                content_sha256,
+                size_bytes: size_bytes.max(0) as u64,
+                actor_id: ActorId(actor_id_str),
+                machine_name,
+                machine_ip,
+                detected_at: DateTime::parse_from_rfc3339(&detected_at_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                impact_summary,
+            });
+        }
+
+        Ok(events)
+    }
+
     /// Add a new memory record. Embedding should be pre-computed (or empty vec for stub).
     pub fn add_memory(
         &self,

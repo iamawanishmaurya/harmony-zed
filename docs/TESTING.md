@@ -191,6 +191,37 @@ Expected:
 - `Registered agents` is at least `1`
 - the synced file appears in the sync output
 
+### Cross-laptop file and folder sync check
+
+1. Run one machine in `[network].mode = "host"` and the other in `[network].mode = "client"`.
+2. Make sure both machines are connected to the same host dashboard.
+3. Create a new folder on one machine, for example `docs/demo`.
+4. Create a new file inside it, for example `docs/demo/test2.txt`.
+5. Wait one sync interval, or about 3 to 5 seconds with the default config.
+6. Confirm the same folder and file appear on the other machine automatically.
+7. Open the dashboard `Files` section on the host URL.
+
+Expected:
+
+- the second machine receives the same folder and file without a manual copy step
+- the dashboard `Files` section shows `Created` cards for the new folder and file
+- each card includes the machine, actor, path, and a short impact summary
+
+### Shared dashboard summary check
+
+1. Create or update a shared file on one machine.
+2. Refresh the dashboard on both machines, or wait for the live websocket update.
+3. Open the `Files` section.
+
+Expected:
+
+- both dashboards show the same recent file activity
+- the summary explains what changed, for example:
+  - created folder ready for new shared work
+  - created file added to the shared project
+  - updated file changed shared project content
+  - deleted entry removed from the shared project
+
 ### Overlap check
 
 1. Sync an assistant edit for a file.

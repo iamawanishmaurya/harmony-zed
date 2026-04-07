@@ -2,6 +2,7 @@ const state = {
   status: null,
   agents: [],
   overlaps: [],
+  files: [],
   memory: [],
   logs: [],
   config: null,
@@ -211,6 +212,70 @@ function renderOverlaps() {
     : `<div class="empty">No resolved overlaps yet.</div>`;
 }
 
+function renderFiles() {
+  const summaryTarget = document.getElementById("files-summary");
+  const gridTarget = document.getElementById("files-grid");
+  if (!summaryTarget || !gridTarget) return;
+
+  if (!state.files.length) {
+    summaryTarget.innerHTML = `<div class="empty">No shared file activity recorded yet.</div>`;
+    gridTarget.innerHTML = "";
+    return;
+  }
+
+  const createdFiles = state.files.filter(
+    (event) => event.entry_kind === "file" && event.change_kind === "created"
+  ).length;
+  const createdFolders = state.files.filter(
+    (event) => event.entry_kind === "directory" && event.change_kind === "created"
+  ).length;
+  const updatedFiles = state.files.filter(
+    (event) => event.entry_kind === "file" && event.change_kind === "updated"
+  ).length;
+  const deletedItems = state.files.filter((event) => event.change_kind === "deleted").length;
+
+  summaryTarget.innerHTML = `
+    <div class="metrics">
+      <div class="metric"><span>New Files</span><strong>${createdFiles}</strong></div>
+      <div class="metric"><span>New Folders</span><strong>${createdFolders}</strong></div>
+      <div class="metric"><span>Updated Files</span><strong>${updatedFiles}</strong></div>
+      <div class="metric"><span>Deleted Items</span><strong>${deletedItems}</strong></div>
+    </div>
+  `;
+
+  gridTarget.innerHTML = state.files
+    .slice()
+    .reverse()
+    .map((event) => {
+      const kind = event.entry_kind === "directory" ? "Folder" : "File";
+      const change =
+        event.change_kind === "created"
+          ? "Created"
+          : event.change_kind === "deleted"
+            ? "Deleted"
+            : "Updated";
+      const pillClass =
+        event.change_kind === "created"
+          ? "ok"
+          : event.change_kind === "deleted"
+            ? "warn"
+            : "sync";
+
+      return `
+        <article class="card file-card">
+          <div class="card-top">
+            <h4>${escapeHtml(event.relative_path)}</h4>
+            <span class="pill ${pillClass}">${escapeHtml(change)}</span>
+          </div>
+          <p>${kind} • ${escapeHtml(event.machine_name || "unknown machine")} • ${formatTimestamp(event.detected_at)}</p>
+          <p class="summary-line">${escapeHtml(event.impact_summary || `${change} ${kind.toLowerCase()} in the shared project.`)}</p>
+          <p>${escapeHtml(normalizeActorId(event.actor_id))}</p>
+        </article>
+      `;
+    })
+    .join("");
+}
+
 function renderMemory() {
   const target = document.getElementById("memory-grid");
   if (!target) return;
@@ -303,6 +368,12 @@ async function refreshOverlaps() {
   attachOverlapButtons();
 }
 
+async function refreshFiles() {
+  const data = await fetchJson("/api/files");
+  state.files = data.events || [];
+  renderFiles();
+}
+
 async function refreshMemory() {
   const data = await fetchJson("/api/memory");
   state.memory = data.records || [];
@@ -327,6 +398,7 @@ async function refreshAll() {
       refreshStatus(),
       refreshAgents(),
       refreshOverlaps(),
+      refreshFiles(),
       refreshMemory(),
       refreshLogs(),
       refreshConfig(),
@@ -369,6 +441,9 @@ function connectWs() {
       case "overlap":
         await refreshOverlaps();
         break;
+      case "file_sync":
+        await refreshFiles();
+        break;
       case "memory_added":
         await refreshMemory();
         break;
@@ -398,5 +473,6 @@ window.setInterval(() => {
   refreshStatus().catch(() => {});
   refreshAgents().catch(() => {});
   refreshOverlaps().catch(() => {});
+  refreshFiles().catch(() => {});
   refreshMemory().catch(() => {});
 }, 5000);

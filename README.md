@@ -2,7 +2,7 @@
 
 Harmony is a local-first Zed extension plus MCP sidecar for safer parallel human and AI development.
 
-It records provenance for code changes, detects overlapping edits, exposes project status through MCP tools and slash commands, and serves a small dashboard for overlap review.
+It records provenance for code changes, detects overlapping edits, exposes project status through MCP tools and slash commands, serves a dashboard for overlap review, and now automatically replicates tracked project files and folders across connected host/client laptops.
 
 ## What Is Verified In This Repo
 
@@ -89,9 +89,17 @@ your-project/
     memory.db
     mcp-debug.log
     agent-sync-state.json
+    network-sync-state.json
 ```
 
 Zed starts `harmony-mcp` itself for normal use. You do not need to keep a separate terminal open for the editor workflow.
+
+When `[network].auto_sync = true` in `.harmony/config.toml`:
+
+- each connected machine scans the project continuously
+- new files and folders are pushed through the host automatically
+- connected laptops pull those changes back down automatically
+- the dashboard `Files` section shows recent created, updated, and deleted entries with an impact summary
 
 ## Verify It Is Working
 
@@ -130,6 +138,18 @@ Or for one file:
 ```
 
 Then run `harmony_pulse` again.
+
+### Cross-Laptop File Sync
+
+With one machine in `host` mode and another in `client` mode, Harmony now auto-syncs project files and folders through the host.
+
+Expected behavior:
+
+- create `test2.txt` on one laptop and it appears on the other laptop automatically
+- create a new folder on one laptop and it appears on the other laptop automatically
+- the host dashboard `Files` section shows those changes with a short project-impact summary
+
+Harmony syncs project contents, not just dashboard state. It still excludes internal folders like `.git`, `.harmony`, `target`, and `node_modules`.
 
 ### CLI Verification
 
@@ -180,6 +200,7 @@ The repo currently ships the smoke test as `smoke-network.ps1`. On Linux, either
 - MCP tool `report_file_edit`
 - slash command `/harmony-pulse`
 - slash command `/harmony-sync`
+- dashboard section `Files`
 
 ## Docs
 

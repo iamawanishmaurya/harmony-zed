@@ -72,6 +72,15 @@ pub struct NetworkConfig {
 
     #[serde(default)]
     pub host_url: Option<String>,
+
+    #[serde(default = "default_true")]
+    pub auto_sync: bool,
+
+    #[serde(default = "default_sync_interval_seconds")]
+    pub sync_interval_seconds: u64,
+
+    #[serde(default = "default_max_sync_file_bytes")]
+    pub max_sync_file_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +204,9 @@ impl Default for NetworkConfig {
             ipc_port: 4232,
             web_port: 4233,
             host_url: None,
+            auto_sync: true,
+            sync_interval_seconds: 3,
+            max_sync_file_bytes: 1024 * 1024,
         }
     }
 }
@@ -250,6 +262,8 @@ fn default_network_mode() -> String { "host".into() }
 fn default_mcp_port() -> u16 { 4231 }
 fn default_ipc_port() -> u16 { 4232 }
 fn default_web_port() -> u16 { 4233 }
+fn default_sync_interval_seconds() -> u64 { 3 }
+fn default_max_sync_file_bytes() -> u64 { 1024 * 1024 }
 fn default_true() -> bool { true }
 fn default_lsp_mode() -> String { "auto".into() }
 fn default_sandbox_mode() -> String { "complex_only".into() }
@@ -334,6 +348,15 @@ web_port = 4233
 
 # In client mode, point this to the host machine's MCP base URL.
 # host_url = "http://192.168.1.10:4231"
+
+# Automatically replicate project files/folders through the Harmony host.
+auto_sync = true
+
+# How often each connected machine scans for local project changes.
+sync_interval_seconds = 3
+
+# Files larger than this are skipped by automatic replication.
+max_sync_file_bytes = 1048576
 
 [analysis]
 # Tree-sitter analysis always enabled

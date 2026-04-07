@@ -231,6 +231,11 @@ small,
   color: var(--warning);
 }
 
+.pill.sync {
+  background: rgba(157, 177, 200, 0.16);
+  color: var(--text);
+}
+
 .tag-row {
   display: flex;
   flex-wrap: wrap;

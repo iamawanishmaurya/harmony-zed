@@ -8,6 +8,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("v004_overlap_events", V004_OVERLAP_EVENTS),
     ("v005_tasks", V005_TASKS),
     ("v006_machine_identity", V006_MACHINE_IDENTITY),
+    ("v007_file_sync_events", V007_FILE_SYNC_EVENTS),
 ];
 
 pub const SCHEMA_VERSION_TABLE: &str = "
@@ -129,6 +130,28 @@ ALTER TABLE agents ADD COLUMN machine_ip TEXT NOT NULL DEFAULT '127.0.0.1';
 
 CREATE INDEX IF NOT EXISTS idx_prov_machine ON provenance_tags(machine_name, machine_ip);
 CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine_name, machine_ip);
+";
+
+pub const V007_FILE_SYNC_EVENTS: &str = "
+CREATE TABLE IF NOT EXISTS file_sync_events (
+    seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+    id             TEXT NOT NULL UNIQUE,
+    relative_path  TEXT NOT NULL,
+    entry_kind     TEXT NOT NULL,
+    change_kind    TEXT NOT NULL,
+    content_base64 TEXT,
+    content_sha256 TEXT,
+    size_bytes     INTEGER NOT NULL DEFAULT 0,
+    actor_id       TEXT NOT NULL,
+    machine_name   TEXT NOT NULL,
+    machine_ip     TEXT NOT NULL,
+    detected_at    TEXT NOT NULL,
+    impact_summary TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_seq ON file_sync_events(seq);
+CREATE INDEX IF NOT EXISTS idx_sync_path ON file_sync_events(relative_path);
+CREATE INDEX IF NOT EXISTS idx_sync_detected_at ON file_sync_events(detected_at);
 ";
 
 /// SQLite connection settings (apply on every connection open)

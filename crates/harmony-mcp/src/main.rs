@@ -1,3 +1,4 @@
+mod file_sync;
 mod server;
 mod tools;
 mod tracking;
@@ -19,6 +20,7 @@ use crate::server::{
     detect_machine_ip, AppState, ClientRuntimeConfig, HostRuntimeConfig, NetworkMode,
     RuntimeState,
 };
+use crate::file_sync::{spawn_client_auto_sync, spawn_host_auto_sync};
 use crate::tracking::{
     normalize_file_path, record_change, synthetic_diff_for_content, RecordChangeArgs,
 };
@@ -313,6 +315,7 @@ async fn run_serve_mode(cli: &Cli, bootstrap: Bootstrap) -> anyhow::Result<()> {
                 .unwrap_or(bootstrap.config.network.web_port);
             let share_url = format!("http://{}:{}", machine_ip, mcp_port);
             let store = Arc::new(Mutex::new(MemoryStore::open(&bootstrap.db_path)?));
+            let sync_config = bootstrap.config.clone();
             let state = AppState {
                 store: Some(store.clone()),
                 started_at: Instant::now(),
@@ -329,6 +332,7 @@ async fn run_serve_mode(cli: &Cli, bootstrap: Bootstrap) -> anyhow::Result<()> {
                 host_url: Some(share_url),
                 runtime: RuntimeState::new(),
             };
+            spawn_host_auto_sync(state.clone(), store.clone(), sync_config);
 
             if cli.serve.stdio_bridge {
                 let bridge_target = format!("http://127.0.0.1:{mcp_port}/mcp");
@@ -354,6 +358,7 @@ async fn run_serve_mode(cli: &Cli, bootstrap: Bootstrap) -> anyhow::Result<()> {
                         "Client mode requires --host-url or .harmony/config.toml [network].host_url"
                     )
                 })?;
+            let sync_config = bootstrap.config.clone();
             let state = AppState {
                 store: None,
                 started_at: Instant::now(),
@@ -379,6 +384,7 @@ async fn run_serve_mode(cli: &Cli, bootstrap: Bootstrap) -> anyhow::Result<()> {
                 host_url: Some(host_url.clone()),
                 runtime: RuntimeState::new(),
             };
+            spawn_client_auto_sync(state.clone(), host_url.clone(), sync_config);
 
             if cli.serve.stdio_bridge {
                 let bridge_target = host_mcp_endpoint(&host_url);

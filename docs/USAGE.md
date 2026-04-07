@@ -44,6 +44,7 @@ your-project/
     memory.db
     mcp-debug.log
     agent-sync-state.json
+    network-sync-state.json
 ```
 
 ### 4. Configure Harmony in Zed
@@ -51,6 +52,8 @@ your-project/
 Open the Harmony context server and click `Configure Server`.
 
 Zed starts `harmony-mcp` itself. You do not need to run a separate `.bat` file for normal editor use.
+
+If `[network].auto_sync = true`, Harmony also keeps project files and folders synchronized across connected host/client laptops through the host server.
 
 ### 5. Verify the connection
 
@@ -82,6 +85,17 @@ If you want to sync one file explicitly:
 
 Then run `harmony_pulse` or `/harmony-pulse` again.
 
+### 7. Watch the shared file timeline
+
+Open the Harmony dashboard and use the new `Files` section to verify:
+
+- newly created files
+- newly created folders
+- updated shared files
+- deleted shared entries
+
+Each file activity card now includes a short impact summary explaining how that change affects the shared project.
+
 ---
 
 ## What Works Today
@@ -95,6 +109,8 @@ Harmony currently supports these verified workflows:
 - Raw MCP tool `report_change`
 - Slash commands `/harmony-pulse` and `/harmony-sync`
 - Native CLI commands `doctor`, `pulse`, `sync`, and default `serve`
+- Automatic host/client project file replication for created folders and files
+- Dashboard `Files` timeline with project-impact summaries
 
 The current Zed extension does not yet have a true "assistant just edited this file" event hook, so `/harmony-sync` is the reliable extension-side bridge after assistant edits.
 
@@ -184,6 +200,7 @@ Harmony creates and uses these project-local files:
 | `.harmony/memory.db` | SQLite database with provenance, agents, overlaps, and memory |
 | `.harmony/mcp-debug.log` | Sidecar debug log |
 | `.harmony/agent-sync-state.json` | Tracks which files were already synced by `/harmony-sync` or `harmony-mcp sync` |
+| `.harmony/network-sync-state.json` | Tracks automatic cross-laptop file replication state |
 
 ---
 
@@ -238,6 +255,14 @@ They surface the same project status, but they are different integration surface
 2. Run `/harmony-sync`.
 3. Run `harmony_pulse`.
 4. Confirm `Registered agents` is at least `1`.
+
+### Verify automatic cross-laptop sync
+
+1. Run one machine in `host` mode and one in `client` mode.
+2. Create a new file or folder on either machine.
+3. Wait a few seconds for the sync interval.
+4. Confirm the same file or folder appears on the other machine.
+5. Open the dashboard `Files` section and confirm the activity card appears there too.
 
 ### Create and detect an overlap
 

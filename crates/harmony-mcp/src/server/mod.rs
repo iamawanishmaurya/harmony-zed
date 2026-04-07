@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
-use harmony_core::types::{Agent, MemoryRecord, OverlapEvent};
+use harmony_core::types::{Agent, FileSyncEvent, MemoryRecord, OverlapEvent};
 use harmony_memory::store::MemoryStore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
@@ -259,6 +259,13 @@ pub fn emit_memory_added(record: &MemoryRecord) {
     }));
 }
 
+pub fn emit_file_sync_event(event: &FileSyncEvent) {
+    broadcast_event(serde_json::json!({
+        "type": "file_sync",
+        "data": event,
+    }));
+}
+
 pub fn emit_machine_update(machine: &ConnectedMachineSnapshot) {
     broadcast_event(serde_json::json!({
         "type": "machine_update",
@@ -298,7 +305,7 @@ fn global_event_sender() -> Option<broadcast::Sender<serde_json::Value>> {
 }
 
 fn snapshot_machine(
-    _state: &AppState,
+    state: &AppState,
     machine: &ConnectedMachine,
     agent_count: usize,
 ) -> ConnectedMachineSnapshot {
@@ -307,7 +314,7 @@ fn snapshot_machine(
         ip: machine.ip.clone(),
         role: machine.role.clone(),
         host_url: machine.host_url.clone(),
-        status: if machine_is_online(machine) {
+        status: if machine_is_online(state, machine) {
             "online".to_string()
         } else {
             "offline".to_string()
@@ -336,7 +343,18 @@ fn agent_count_for_machine(state: &AppState, machine: &ConnectedMachine) -> usiz
         .unwrap_or(0)
 }
 
-fn machine_is_online(machine: &ConnectedMachine) -> bool {
+fn machine_is_online(state: &AppState, machine: &ConnectedMachine) -> bool {
+    // The host server is answering this request right now, so its own machine
+    // entry should never be shown as offline just because no heartbeat loop
+    // refreshes its last_seen timestamp.
+    if state.mode == NetworkMode::Host
+        && machine.role.eq_ignore_ascii_case("host")
+        && machine.name.eq_ignore_ascii_case(&state.machine_name)
+        && machine.ip == state.machine_ip
+    {
+        return true;
+    }
+
     (Utc::now() - machine.last_seen).num_seconds() <= MACHINE_OFFLINE_AFTER_SECS
 }
 
@@ -396,4 +414,58 @@ fn host_api_endpoint(host_url: &str, path: &str) -> String {
     let trimmed = host_url.trim_end_matches('/');
     let base = trimmed.strip_suffix("/mcp").unwrap_or(trimmed);
     format!("{base}{path}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn test_state(mode: NetworkMode) -> AppState {
+        AppState {
+            store: None,
+            started_at: Instant::now(),
+            project_root: PathBuf::from("C:/tmp/project"),
+            db_path: None,
+            config_path: PathBuf::from("C:/tmp/project/.harmony/config.toml"),
+            debug_log_path: PathBuf::from("C:/tmp/project/.harmony/mcp-debug.log"),
+            machine_name: "water".to_string(),
+            machine_ip: "152.20.22.4".to_string(),
+            mode,
+            mcp_port: 4231,
+            ipc_port: 4232,
+            web_port: 4233,
+            host_url: Some("http://152.20.22.4:4231".to_string()),
+            runtime: RuntimeState::new(),
+        }
+    }
+
+    fn test_machine(name: &str, ip: &str, role: &str, age_secs: i64) -> ConnectedMachine {
+        let now = Utc::now();
+        ConnectedMachine {
+            name: name.to_string(),
+            ip: ip.to_string(),
+            role: role.to_string(),
+            host_url: Some("http://152.20.22.4:4231".to_string()),
+            registered_at: now - Duration::seconds(age_secs),
+            last_seen: now - Duration::seconds(age_secs),
+        }
+    }
+
+    #[test]
+    fn running_host_reports_itself_online_even_with_stale_last_seen() {
+        let state = test_state(NetworkMode::Host);
+        let machine = test_machine("water", "152.20.22.4", "host", MACHINE_OFFLINE_AFTER_SECS + 30);
+
+        assert!(machine_is_online(&state, &machine));
+    }
+
+    #[test]
+    fn stale_client_is_still_reported_offline() {
+        let state = test_state(NetworkMode::Host);
+        let machine =
+            test_machine("User2-Linux", "152.20.22.29", "client", MACHINE_OFFLINE_AFTER_SECS + 1);
+
+        assert!(!machine_is_online(&state, &machine));
+    }
 }

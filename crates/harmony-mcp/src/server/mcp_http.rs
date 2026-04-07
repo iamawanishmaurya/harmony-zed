@@ -1,15 +1,16 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use harmony_core::types::FileSyncEvent;
 use harmony_memory::store::MemoryStore;
 use tower_http::cors::{Any, CorsLayer};
 
-use super::{emit_log, upsert_machine, AppState, MachineRegistrationPayload};
+use super::{emit_file_sync_event, emit_log, upsert_machine, AppState, MachineRegistrationPayload};
 use crate::types::{RequestContext, MACHINE_IP_HEADER, MACHINE_NAME_HEADER};
 
 pub async fn serve(
@@ -21,6 +22,8 @@ pub async fn serve(
         .route("/mcp", post(handle_mcp))
         .route("/api/machines/register", post(handle_machine_register))
         .route("/api/machines/heartbeat", post(handle_machine_heartbeat))
+        .route("/api/filesync/events", get(handle_file_sync_events))
+        .route("/api/filesync/push", post(handle_file_sync_push))
         .with_state(HttpState { state, store })
         .layer(
             CorsLayer::new()
@@ -39,6 +42,17 @@ pub async fn serve(
 struct HttpState {
     state: AppState,
     store: Arc<Mutex<MemoryStore>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FileSyncQuery {
+    since_seq: Option<i64>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FileSyncPushRequest {
+    event: FileSyncEvent,
 }
 
 async fn handle_mcp(
@@ -116,6 +130,59 @@ async fn handle_machine_heartbeat(
 ) -> Response {
     let snapshot = upsert_machine(&http_state.state, payload).await;
     (StatusCode::OK, Json(serde_json::json!({ "machine": snapshot }))).into_response()
+}
+
+async fn handle_file_sync_events(
+    State(http_state): State<HttpState>,
+    Query(query): Query<FileSyncQuery>,
+) -> Response {
+    let since_seq = query.since_seq.unwrap_or(0);
+    let limit = query.limit.unwrap_or(256).clamp(1, 1000);
+
+    match http_state
+        .store
+        .lock()
+        .unwrap()
+        .get_file_sync_events_since(since_seq, limit)
+    {
+        Ok(events) => (StatusCode::OK, Json(serde_json::json!({ "events": events }))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn handle_file_sync_push(
+    State(http_state): State<HttpState>,
+    Json(request): Json<FileSyncPushRequest>,
+) -> Response {
+    match http_state.store.lock().unwrap().insert_file_sync_event(&request.event) {
+        Ok(event) => {
+            emit_log(
+                "INFO",
+                "sync",
+                format!(
+                    "received remote {} {} from {}",
+                    match &event.change_kind {
+                        harmony_core::types::FileSyncChangeKind::Created => "create",
+                        harmony_core::types::FileSyncChangeKind::Updated => "update",
+                        harmony_core::types::FileSyncChangeKind::Deleted => "delete",
+                    },
+                    event.relative_path,
+                    event.machine_name
+                ),
+            );
+            emit_file_sync_event(&event);
+            (StatusCode::OK, Json(serde_json::json!({ "event": event }))).into_response()
+        }
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 fn header_value(headers: &HeaderMap, key: &str) -> Option<String> {

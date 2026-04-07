@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{Method, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
@@ -27,6 +27,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> anyhow::Result<()> {
         .route("/api/status", get(api_status))
         .route("/api/agents", get(api_agents))
         .route("/api/overlaps", get(api_overlaps))
+        .route("/api/files", get(api_files))
         .route("/api/memory", get(api_memory))
         .route("/api/logs", get(api_logs))
         .route("/api/config", get(api_config))
@@ -51,6 +52,12 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> anyhow::Result<()> {
 struct ResolveRequest {
     overlap_id: String,
     resolution: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FileQuery {
+    limit: Option<u32>,
+    since_seq: Option<i64>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -215,6 +222,38 @@ async fn api_memory(State(state): State<AppState>) -> impl IntoResponse {
         .query_memory_by_tag("decision", MemoryNamespace::Shared, 50)
     {
         Ok(records) => (StatusCode::OK, Json(serde_json::json!({ "records": records }))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        ),
+    }
+}
+
+async fn api_files(
+    State(state): State<AppState>,
+    Query(query): Query<FileQuery>,
+) -> impl IntoResponse {
+    let Some(store) = &state.store else {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "File activity is only available on the host server."
+            })),
+        );
+    };
+
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
+    let result = if let Some(since_seq) = query.since_seq {
+        store
+            .lock()
+            .unwrap()
+            .get_file_sync_events_since(since_seq, limit)
+    } else {
+        store.lock().unwrap().get_recent_file_sync_events(limit)
+    };
+
+    match result {
+        Ok(events) => (StatusCode::OK, Json(serde_json::json!({ "events": events }))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error.to_string() })),

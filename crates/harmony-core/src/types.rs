@@ -225,6 +225,38 @@ pub enum MemoryNamespace {
     Agent(Uuid),  // Uuid of the Agent
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileSyncEntryKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileSyncChangeKind {
+    Created,
+    Updated,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSyncEvent {
+    pub seq: i64,
+    pub id: Uuid,
+    pub relative_path: String,
+    pub entry_kind: FileSyncEntryKind,
+    pub change_kind: FileSyncChangeKind,
+    pub content_base64: Option<String>,
+    pub content_sha256: Option<String>,
+    pub size_bytes: u64,
+    pub actor_id: ActorId,
+    pub machine_name: String,
+    pub machine_ip: String,
+    pub detected_at: DateTime<Utc>,
+    pub impact_summary: String,
+}
+
 // ─── Shadow Diff ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,5 +477,31 @@ mod tests {
         let json = serde_json::to_string(&ns).unwrap();
         let deserialized: MemoryNamespace = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, ns);
+    }
+
+    #[test]
+    fn test_file_sync_event_serialization() {
+        let event = FileSyncEvent {
+            seq: 7,
+            id: Uuid::new_v4(),
+            relative_path: "src/new-file.ts".to_string(),
+            entry_kind: FileSyncEntryKind::File,
+            change_kind: FileSyncChangeKind::Created,
+            content_base64: Some("aGVsbG8=".to_string()),
+            content_sha256: Some("abc123".to_string()),
+            size_bytes: 5,
+            actor_id: ActorId("human:water".to_string()),
+            machine_name: "water".to_string(),
+            machine_ip: "152.20.22.4".to_string(),
+            detected_at: Utc::now(),
+            impact_summary: "Adds a new project file that will sync to connected laptops."
+                .to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: FileSyncEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.seq, 7);
+        assert_eq!(deserialized.entry_kind, FileSyncEntryKind::File);
+        assert_eq!(deserialized.change_kind, FileSyncChangeKind::Created);
+        assert_eq!(deserialized.relative_path, "src/new-file.ts");
     }
 }
