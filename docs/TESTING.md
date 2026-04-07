@@ -1,193 +1,286 @@
-# Harmony — Testing Guide
+# Harmony - Testing Guide
 
-> Cross-platform testing workflow for the Harmony v0.1.1 negotiation backends and IPC
+> Verified test and smoke-check workflow for the current Harmony repository.
 
 ---
 
-## Phase 1 — Unit Tests (both platforms, same commands)
+## Automated Test Baseline
 
-```bash
-# Run all 8 new negotiation backend tests
-cargo test -p harmony-core --test negotiation_tests -- --nocapture
+### Platform note
 
-# Run the full existing suite to confirm nothing broke
-cargo test -p harmony-core -p harmony-memory -p harmony-analyzer
+- On Windows, use the PowerShell examples as written.
+- On Linux, the same commands work in a shell, except the binary path is `./target/release/harmony-mcp` instead of `.\target\release\harmony-mcp.exe`.
+
+Run the full suite:
+
+```powershell
+cargo test -p harmony-core -p harmony-memory -p harmony-analyzer -p harmony-mcp -p harmony-extension
 ```
 
-Expected: **8 passed** for negotiation, **95 total** for everything.
+Latest verified result on 2026-04-07:
+
+- **118 passed**
+- **0 failed**
+- **1 ignored**
+
+The ignored test is the live GitHub Models smoke test, which requires real credentials.
 
 ---
 
-## Phase 2 — Cross-Platform Build Check
+## Release Build Verification
 
-### On Arch Linux (building for both targets)
+### Build the native sidecar
 
-```bash
-# Native Arch build
+```powershell
 cargo build --release -p harmony-mcp
-
-# Cross-compile Windows binary from Arch
-sudo pacman -S mingw-w64-gcc
-rustup target add x86_64-pc-windows-gnu
-cargo build --release -p harmony-mcp --target x86_64-pc-windows-gnu
-
-# Confirm the Windows .exe was produced
-ls -lh target/x86_64-pc-windows-gnu/release/harmony-mcp.exe
 ```
 
-### On Windows (PowerShell)
+Linux:
 
-```powershell
-# Build the native sidecar
+```bash
 cargo build --release -p harmony-mcp
-
-# Confirm binary exists
-Get-Item .\target\release\harmony-mcp.exe
 ```
 
----
-
-## Phase 3 — IPC Smoke Test (platform-specific)
-
-### Arch Linux — Unix Socket
-
-```bash
-mkdir -p /tmp/test-project/.harmony
-./target/release/harmony-mcp --db-path /tmp/test-project/.harmony/memory.db &
-sleep 1
-
-# Ping test
-echo '{"cmd":"ping"}' | socat - UNIX-CONNECT:/tmp/test-project/.harmony/harmony.sock
-# Expected: {"result":"pong"}
-```
-
-### Windows — TCP Fallback
+### Build the Zed extension
 
 ```powershell
-# Start sidecar
-Start-Process .\target\release\harmony-mcp.exe -ArgumentList "--db-path C:\tmp\test\.harmony\memory.db"
-Start-Sleep -Seconds 2
+rustup target add wasm32-wasip2
+cargo build --release -p harmony-extension --target wasm32-wasip2
+```
 
-# Check it's listening on the right port
-netstat -ano | findstr "17432"
+Linux:
 
-# Ping via TCP using PowerShell
-$tcp = New-Object System.Net.Sockets.TcpClient("127.0.0.1", 17432)
-$stream = $tcp.GetStream()
-$msg = '{"cmd":"ping"}'
-$bytes = [System.Text.Encoding]::UTF8.GetBytes($msg)
-$stream.Write($bytes, 0, $bytes.Length)
-# Read response and print it
+```bash
+rustup target add wasm32-wasip2
+cargo build --release -p harmony-extension --target wasm32-wasip2
 ```
 
 ---
 
-## Phase 4 — Backend Smoke Tests (real API keys)
+## CLI Smoke Tests
 
-For each backend, set the config in `.harmony/config.toml` and verify the negotiation pipeline.
-
-### OpenAI
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "sk-..."
-model = "gpt-4o"
-```
-
-```bash
-# Check the negotiation produced a memory note
-sqlite3 .harmony/memory.db \
-  "SELECT content FROM memory_records WHERE namespace='shared' ORDER BY created_at DESC LIMIT 1;"
-```
-
-### GitHub Copilot
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "ghp_..."
-model = "gpt-4o"
-base_url = "https://api.githubcopilot.com"
-```
-
-> If you see a `401`, your token is missing the `copilot` scope — regenerate at github.com/settings/tokens.
-
-### Anthropic Claude
-
-```toml
-[negotiation]
-negotiation_backend = "anthropic"
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-6"
-```
-
-### Ollama (Arch Linux, no API key needed)
-
-```bash
-# Install and start Ollama
-sudo pacman -S ollama
-ollama serve &
-ollama pull llama3.3
-```
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "ollama"
-model = "llama3.3"
-base_url = "http://localhost:11434/v1"
-```
-
-### LM Studio (Windows)
-
-Download from lmstudio.ai → load any model → enable local server → then:
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "lm-studio"
-model = "local-model"
-base_url = "http://localhost:1234/v1"
-```
-
-**Pass criteria for each backend**: The negotiation returns a `proposed_diff` that is a valid unified diff and a non-empty `rationale` string.
-
----
-
-## Phase 5 — Reliability Check (both platforms)
-
-### Linux/macOS
-
-```bash
-for i in 1 2 3; do
-  time cargo test -p harmony-core --test e2e_golden_path
-  echo "--- Run $i done ---"
-done
-```
-
-### Windows (PowerShell)
+### 1. Doctor
 
 ```powershell
-1..3 | ForEach-Object {
-  Measure-Command { cargo test -p harmony-core --test e2e_golden_path }
-  Write-Host "--- Run $_ done ---"
-}
+.\target\release\harmony-mcp.exe doctor --db-path C:\path\to\project\.harmony\memory.db
+```
+
+Linux:
+
+```bash
+./target/release/harmony-mcp doctor --db-path /path/to/project/.harmony/memory.db
+```
+
+Expected:
+
+- project path printed
+- database path printed
+- config path printed
+- `Status: ready`
+
+### 2. Pulse
+
+```powershell
+.\target\release\harmony-mcp.exe pulse --db-path C:\path\to\project\.harmony\memory.db
+```
+
+Linux:
+
+```bash
+./target/release/harmony-mcp pulse --db-path /path/to/project/.harmony/memory.db
+```
+
+Expected:
+
+- project path
+- database path
+- registered agents count
+- pending overlaps count
+
+### 3. Sync
+
+```powershell
+.\target\release\harmony-mcp.exe sync --db-path C:\path\to\project\.harmony\memory.db
+```
+
+Linux:
+
+```bash
+./target/release/harmony-mcp sync --db-path /path/to/project/.harmony/memory.db
+```
+
+Expected:
+
+- `Harmony Sync`
+- scanned file count
+- synced file count
+- overlap count
+
+Explicit single-file sync:
+
+```powershell
+.\target\release\harmony-mcp.exe sync --db-path C:\path\to\project\.harmony\memory.db --file src\app.ts --actor-id agent:zed-assistant
 ```
 
 ---
 
-## Troubleshooting Quick Reference
+## Raw MCP Transport Smoke Test
 
-| Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
-| `NegotiationNotConfigured` | Backend key missing or typo | Check `.harmony/config.toml` spelling |
-| `401 Unauthorized` from Copilot | Token missing `copilot` scope | Regenerate at github.com/settings/tokens |
-| `Connection refused` on Windows | Sidecar not writing `.harmony/harmony.port` | Check `#[cfg(target_os = "windows")]` compiled |
-| `NegotiationInvalidResponse` | LLM returned markdown not JSON | Template B already has `"Respond ONLY with valid JSON"` |
-| Anthropic `401` | Missing header | Both `x-api-key` and `anthropic-version: 2023-06-01` required |
-| Ollama timeout | Model not pulled | Run `ollama pull llama3.3` first |
+This verifies the stdio MCP transport directly.
+
+```powershell
+@'
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"manual","version":"1.0.0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized","params":null}
+{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+'@ | .\target\release\harmony-mcp.exe --db-path C:\path\to\project\.harmony\memory.db
+```
+
+Expected:
+
+- successful `initialize` response
+- tool list containing `harmony_pulse`
+- tool list containing `report_file_edit`
 
 ---
 
-*Harmony v0.1.1 — Awanish Maurya · XPWNIT LAB · April 2026*
+## Zed Manual Verification
+
+### Install and connect
+
+1. Build `harmony-mcp`.
+2. Open Zed.
+3. Run `zed: install dev extension`.
+4. Select `<repo>\crates\harmony-extension`.
+5. Open the project you want Harmony to track.
+6. Configure the `harmony-memory` context server.
+
+Expected:
+
+- Harmony config panel opens
+- `Configure Server` succeeds
+- no timeout
+
+### Pulse check
+
+In a tool-enabled Agent chat:
+
+```text
+run the harmony_pulse tool
+```
+
+Or run:
+
+```text
+/harmony-pulse
+```
+
+Expected:
+
+- project path matches the open project
+- database path matches `<project>\.harmony\memory.db`
+
+### Assistant edit sync check
+
+1. Ask the assistant to create or edit a file.
+2. Run `/harmony-sync`.
+3. Run `harmony_pulse` again.
+
+Expected:
+
+- `Registered agents` is at least `1`
+- the synced file appears in the sync output
+
+### Overlap check
+
+1. Sync an assistant edit for a file.
+2. Record a human edit in the same file and overlapping line range.
+3. Run `harmony_pulse`.
+
+Expected:
+
+- `Pending overlaps` increases
+- Pulse shows the overlapping file and actors
+
+### Linux manual verification notes
+
+- Install the same dev extension from `crates/harmony-extension`.
+- Use the same `Configure Server` flow in Zed.
+- If you want CLI confirmation outside Zed, use the Linux commands above against the project's `.harmony/memory.db`.
+
+---
+
+## Targeted Test Commands
+
+### `harmony-mcp`
+
+```powershell
+cargo test -p harmony-mcp
+```
+
+This includes:
+
+- transport parsing tests
+- `harmony_pulse` tool tests
+- `report_file_edit` tests
+- `sync` CLI tests
+
+### `harmony-extension`
+
+```powershell
+cargo test -p harmony-extension
+```
+
+These are currently focused on extension-side helper logic and panel data structures.
+
+---
+
+## Logs to Inspect
+
+### Harmony sidecar log
+
+```powershell
+Get-Content -Tail 120 .harmony\mcp-debug.log
+```
+
+Linux:
+
+```bash
+tail -n 120 .harmony/mcp-debug.log
+```
+
+### Zed log
+
+```powershell
+Get-Content -Tail 120 C:\Users\water\AppData\Local\Zed\logs\Zed.log
+```
+
+Linux:
+
+```bash
+tail -n 120 ~/.local/state/zed/logs/Zed.log
+```
+
+---
+
+## Known Testing Limits
+
+- There is no automated GUI test suite for Zed itself in this repo.
+- Automatic assistant-edit capture is not implemented yet, so `/harmony-sync` is part of the verified workflow.
+- Some extension scaffolding modules still generate warnings, but they do not block the current build or sync flow.
+
+---
+
+## Quick Troubleshooting Reference
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Dev extension fails to install | wrong folder selected | install from `crates/harmony-extension` |
+| Context server configure times out | stale or broken sidecar binary | rebuild `harmony-mcp`, reopen Zed, inspect logs |
+| Pulse shows wrong project | Harmony attached to the wrong open folder | reopen the correct project and reconfigure |
+| Agent count stays zero after assistant edit | edit was not reported | run `/harmony-sync` |
+| Overlap count stays zero | changes were not overlapping or not both reported | confirm same file, same lines, and reported changes |
+
+---
+
+*Last updated: 2026-04-07*

@@ -190,6 +190,8 @@ mod tests {
         let tag_a = ProvenanceTag {
             id: Uuid::new_v4(),
             actor_id: ActorId("human:awanish".to_string()),
+            machine_name: "Awanish-Laptop".to_string(),
+            machine_ip: "192.168.1.10".to_string(),
             actor_kind: ActorKind::Human,
             task_id: None,
             task_prompt: None,
@@ -204,6 +206,8 @@ mod tests {
         let tag_b = ProvenanceTag {
             id: Uuid::new_v4(),
             actor_id: ActorId("agent:architect-01".to_string()),
+            machine_name: "Rahul-Laptop".to_string(),
+            machine_ip: "192.168.1.22".to_string(),
             actor_kind: ActorKind::Agent,
             task_id: None,
             task_prompt: Some("Add Redis caching".to_string()),

@@ -47,6 +47,8 @@ pub struct AgentRole {
 pub struct Agent {
     pub id: Uuid,
     pub actor_id: ActorId,          // "agent:{role}-{short_id}"
+    pub machine_name: String,       // "Awanish" or "Rahul"
+    pub machine_ip: String,         // "192.168.1.10" or "192.168.1.22"
     pub role: AgentRole,
     pub status: AgentStatus,
     pub mode: AgentMode,
@@ -88,6 +90,8 @@ impl TextRange {
 pub struct ProvenanceTag {
     pub id: Uuid,
     pub actor_id: ActorId,
+    pub machine_name: String,       // "Awanish" or "Rahul"
+    pub machine_ip: String,         // "192.168.1.10" or "192.168.1.22"
     pub actor_kind: ActorKind,
     pub task_id: Option<Uuid>,
     pub task_prompt: Option<String>,
@@ -353,6 +357,8 @@ mod tests {
         let tag = ProvenanceTag {
             id: Uuid::new_v4(),
             actor_id: ActorId("agent:architect-01".to_string()),
+            machine_name: "Awanish".to_string(),
+            machine_ip: "192.168.1.10".to_string(),
             actor_kind: ActorKind::Agent,
             task_id: Some(Uuid::new_v4()),
             task_prompt: Some("Implement rate limiting".to_string()),
@@ -374,6 +380,8 @@ mod tests {
         let agent = Agent {
             id: Uuid::new_v4(),
             actor_id: ActorId("agent:coder-01".to_string()),
+            machine_name: "Rahul".to_string(),
+            machine_ip: "192.168.1.22".to_string(),
             role: AgentRole {
                 name: "Coder".to_string(),
                 avatar_key: "agent-coder".to_string(),

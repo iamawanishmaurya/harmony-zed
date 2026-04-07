@@ -7,9 +7,18 @@ authors = ["Awanish Maurya <awanish@xpwnit.me>"]
 repository = "https://github.com/iamawanishmaurya/harmony-zed"
 
 [context_servers.harmony-memory]
-command = "C:\\Users\\water\\Desktop\\Testing\\mmcp-windows\\Harmony\\target\\release\\harmony-mcp.exe"
 
 [slash_commands.harmony-pulse]
 description = "Check for active Harmony Agent overlaps"
 tooltip_text = "Displays overlapping human+agent edits"
+requires_argument = false
+
+[slash_commands.harmony-sync]
+description = "Register recent assistant edits with Harmony"
+tooltip_text = "Sync recent or explicit files into the Harmony project database"
+requires_argument = false
+
+[slash_commands.harmony-dashboard]
+description = "Open the Harmony network dashboard"
+tooltip_text = "Opens the local or shared Harmony dashboard in your browser"
 requires_argument = false

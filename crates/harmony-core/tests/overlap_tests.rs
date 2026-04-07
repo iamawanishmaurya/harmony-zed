@@ -13,6 +13,8 @@ fn make_tag(actor: &str, start: u32, end: u32) -> ProvenanceTag {
     ProvenanceTag {
         id: Uuid::new_v4(),
         actor_id: ActorId(actor.to_string()),
+        machine_name: "local".to_string(),
+        machine_ip: "127.0.0.1".to_string(),
         actor_kind: if actor.starts_with("human:") { ActorKind::Human } else { ActorKind::Agent },
         task_id: None,
         task_prompt: None,

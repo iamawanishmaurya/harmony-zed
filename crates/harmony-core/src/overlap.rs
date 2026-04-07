@@ -88,6 +88,8 @@ mod tests {
         ProvenanceTag {
             id: Uuid::new_v4(),
             actor_id: ActorId(actor_id.to_string()),
+            machine_name: "local".to_string(),
+            machine_ip: "127.0.0.1".to_string(),
             actor_kind: if actor_id.starts_with("human:") {
                 ActorKind::Human
             } else {

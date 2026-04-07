@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Harmony Dashboard</title>
+    <style>{{CSS}}</style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <h1>Harmony</h1>
+        <p class="subtitle">Same-Network Dashboard</p>
+        <nav>
+          <a href="#status">Network</a>
+          <a href="#agents">Agents</a>
+          <a href="#overlaps">Overlaps</a>
+          <a href="#memory">Memory</a>
+          <a href="#logs">Logs</a>
+          <a href="#config">Config</a>
+        </nav>
+      </aside>
+
+      <main class="content">
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Harmony Network</p>
+            <h2>Shared host, shared memory, shared overlap view</h2>
+            <p id="hero-status" class="hero-status">Starting…</p>
+          </div>
+          <button id="refresh" type="button">Refresh</button>
+        </header>
+
+        <section id="status" class="panel">
+          <div class="section-header">
+            <h3>Network</h3>
+            <p>Live server, machine, and service status.</p>
+          </div>
+          <div id="status-grid"></div>
+        </section>
+
+        <section id="agents" class="panel">
+          <div class="section-header">
+            <h3>Agents</h3>
+            <p>Tracked agents from every connected machine.</p>
+          </div>
+          <div id="agents-grid" class="card-grid"></div>
+        </section>
+
+        <section id="overlaps" class="panel">
+          <div class="section-header">
+            <h3>Overlaps</h3>
+            <p>Resolve active overlaps directly from the dashboard.</p>
+          </div>
+          <div class="subheading">Pending</div>
+          <div id="overlaps-pending" class="card-grid"></div>
+          <div class="subheading">Resolved</div>
+          <div id="overlaps-resolved" class="card-grid"></div>
+        </section>
+
+        <section id="memory" class="panel">
+          <div class="section-header">
+            <h3>Memory</h3>
+            <p>Recent shared-memory decisions and notes.</p>
+          </div>
+          <div id="memory-grid" class="card-grid"></div>
+        </section>
+
+        <section id="logs" class="panel">
+          <div class="section-header">
+            <h3>Logs</h3>
+            <p>Streaming Harmony host activity.</p>
+          </div>
+          <div id="logs-output" class="log-console">Waiting for Harmony logs…</div>
+        </section>
+
+        <section id="config" class="panel">
+          <div class="section-header">
+            <h3>Config</h3>
+            <p>Current host configuration file.</p>
+          </div>
+          <pre id="config-output">Loading…</pre>
+        </section>
+      </main>
+    </div>
+    <script>{{JS}}</script>
+  </body>
+</html>

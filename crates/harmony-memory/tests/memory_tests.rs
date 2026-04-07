@@ -18,6 +18,8 @@ fn make_tag(actor: &str, file: &str) -> ProvenanceTag {
     ProvenanceTag {
         id: Uuid::new_v4(),
         actor_id: ActorId(actor.to_string()),
+        machine_name: "local".to_string(),
+        machine_ip: "127.0.0.1".to_string(),
         actor_kind: if actor.starts_with("human:") { ActorKind::Human } else { ActorKind::Agent },
         task_id: None, task_prompt: None,
         timestamp: Utc::now(),
@@ -60,6 +62,8 @@ fn test_agent_lifecycle() {
     let agent = Agent {
         id: Uuid::new_v4(),
         actor_id: ActorId("agent:architect-01".to_string()),
+        machine_name: "local".to_string(),
+        machine_ip: "127.0.0.1".to_string(),
         role: AgentRole {
             name: "Architect".to_string(),
             avatar_key: "agent-architect".to_string(),

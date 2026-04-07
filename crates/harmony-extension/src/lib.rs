@@ -3,6 +3,7 @@
 //! WASM-compiled extension that provides:
 //! - A project-local Harmony MCP context server
 //! - The `/harmony-pulse` diagnostic slash command
+//! - The `/harmony-dashboard` helper for opening the network dashboard
 
 mod sidecar;
 mod panels;
@@ -34,45 +35,45 @@ impl zed::Extension for HarmonyExtension {
     fn run_slash_command(
         &self,
         command: zed::SlashCommand,
-        _args: Vec<String>,
+        args: Vec<String>,
         worktree: Option<&zed::Worktree>,
     ) -> Result<zed::SlashCommandOutput, String> {
         match command.name.as_str() {
             "harmony-pulse" => {
                 let binary = Self::resolve_binary_path()?;
                 let db_path = Self::resolve_db_path_for_worktree(worktree, &binary);
-                let mut command = zed::Command::new(binary)
+                let mut native_command = zed::Command::new(binary)
                     .arg("pulse")
                     .arg("--db-path")
                     .arg(db_path);
+                Self::run_native_slash_command(&mut native_command, "Harmony Pulse")
+            }
+            "harmony-sync" => {
+                let binary = Self::resolve_binary_path()?;
+                let db_path = Self::resolve_db_path_for_worktree(worktree, &binary);
+                let mut native_command = zed::Command::new(binary)
+                    .arg("sync")
+                    .arg("--db-path")
+                    .arg(db_path)
+                    .arg("--actor-id")
+                    .arg("agent:zed-assistant");
 
-                let output = command.output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-                if output.status != Some(0) {
-                    let details = if stderr.is_empty() {
-                        "harmony-mcp exited with a non-zero status.".to_string()
-                    } else {
-                        stderr
-                    };
-                    return Err(format!("Harmony Pulse failed: {details}"));
+                if args.is_empty() {
+                    native_command = native_command.arg("--since-seconds").arg("900");
+                } else {
+                    for path in args {
+                        native_command = native_command.arg("--file").arg(path);
+                    }
                 }
 
-                let text = if stdout.is_empty() {
-                    "Harmony Pulse returned no output.".to_string()
-                } else {
-                    stdout
-                };
-                let end = text.len();
-
-                Ok(zed::SlashCommandOutput {
-                    sections: vec![zed::SlashCommandOutputSection {
-                        range: (0..end).into(),
-                        label: "Harmony Pulse".to_string(),
-                    }],
-                    text,
-                })
+                Self::run_native_slash_command(&mut native_command, "Harmony Sync")
+            }
+            "harmony-dashboard" => {
+                let url = args
+                    .first()
+                    .map(|value| Self::normalize_dashboard_url(value))
+                    .unwrap_or_else(|| "http://localhost:4233".to_string());
+                Self::open_dashboard(&url)
             }
             other => Err(format!("Unknown command: {other}")),
         }
@@ -91,6 +92,7 @@ impl zed::Extension for HarmonyExtension {
         let db_path = Self::resolve_db_path_for_project(project)?;
 
         Ok(zed::Command::new(binary)
+            .arg("--stdio-bridge")
             .arg("--db-path")
             .arg(db_path))
     }
@@ -110,7 +112,7 @@ impl zed::Extension for HarmonyExtension {
 
         Ok(Some(zed::ContextServerConfiguration {
             installation_instructions: format!(
-                "Build the native sidecar before enabling Harmony in Zed:\n\n```powershell\ncargo build --release -p harmony-mcp\n```\n\nHarmony binary:\n{}\n\nHarmony database for this project:\n{}\n\nHarmony debug log:\n{}\n\nZed log:\nC:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log\n\nTip: after a failed Configure attempt, inspect the logs with:\n```powershell\nGet-Content -Tail 120 \"{}\"\nGet-Content -Tail 120 \"C:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log\"\n```",
+                "Build the native sidecar before enabling Harmony in Zed:\n\n```powershell\ncargo build --release -p harmony-mcp\n```\n\nZed now launches Harmony through the network bridge automatically when you click Configure Server.\n\nSame-network setup:\n1. On the host laptop, set `.harmony/config.toml` `[network].mode = \"host\"`\n2. On the client laptop, set `[network].mode = \"client\"` and `host_url = \"http://HOST_IP:4231\"`\n3. Click Configure Server in Zed on each machine\n4. Open the dashboard with `/harmony-dashboard`\n\nHarmony binary:\n{}\n\nHarmony database for this project:\n{}\n\nHarmony debug log:\n{}\n\nUseful slash commands after assistant edits:\n- `/harmony-sync`\n- `/harmony-sync path/to/file`\n- `/harmony-pulse`\n- `/harmony-dashboard`\n\nZed log:\nC:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log\n\nTip: after a failed Configure attempt, inspect the logs with:\n```powershell\nGet-Content -Tail 120 \"{}\"\nGet-Content -Tail 120 \"C:\\Users\\water\\AppData\\Local\\Zed\\logs\\Zed.log\"\n```",
                 binary,
                 db_path,
                 debug_log,
@@ -123,6 +125,74 @@ impl zed::Extension for HarmonyExtension {
 }
 
 impl HarmonyExtension {
+    fn open_dashboard(url: &str) -> Result<zed::SlashCommandOutput, String> {
+        let mut command = match zed::current_platform().0 {
+            zed::Os::Windows => zed::Command::new(Self::cmd_binary())
+                .arg("/c")
+                .arg("start")
+                .arg("")
+                .arg(url),
+            zed::Os::Mac => zed::Command::new("open").arg(url),
+            _ => zed::Command::new("xdg-open").arg(url),
+        };
+        let output = command.output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        if output.status != Some(0) {
+            let details = if stderr.is_empty() {
+                format!("Failed to open the Harmony dashboard at {url}.")
+            } else {
+                stderr
+            };
+            return Err(details);
+        }
+
+        let text = format!(
+            "Opened Harmony Dashboard:\n{url}\n\nTip: you can also pass a host URL explicitly, for example `/harmony-dashboard http://192.168.1.10:4233`."
+        );
+        let end = text.len();
+        Ok(zed::SlashCommandOutput {
+            sections: vec![zed::SlashCommandOutputSection {
+                range: (0..end).into(),
+                label: "Harmony Dashboard".to_string(),
+            }],
+            text,
+        })
+    }
+
+    fn run_native_slash_command(
+        command: &mut zed::Command,
+        label: &str,
+    ) -> Result<zed::SlashCommandOutput, String> {
+        let output = command.output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        if output.status != Some(0) {
+            let details = if stderr.is_empty() {
+                "harmony-mcp exited with a non-zero status.".to_string()
+            } else {
+                stderr
+            };
+            return Err(format!("{label} failed: {details}"));
+        }
+
+        let text = if stdout.is_empty() {
+            format!("{label} returned no output.")
+        } else {
+            stdout
+        };
+        let end = text.len();
+
+        Ok(zed::SlashCommandOutput {
+            sections: vec![zed::SlashCommandOutputSection {
+                range: (0..end).into(),
+                label: label.to_string(),
+            }],
+            text,
+        })
+    }
+
     fn resolve_binary_path() -> Result<String, String> {
         if let Some(path) = Self::binary_path_from_manifest() {
             return Ok(path);
@@ -187,6 +257,23 @@ impl HarmonyExtension {
             .ok()
             .filter(|path| !path.trim().is_empty())
             .unwrap_or_else(|| "cmd.exe".to_string())
+    }
+
+    fn normalize_dashboard_url(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return "http://localhost:4233".to_string();
+        }
+
+        let without_mcp = trimmed
+            .strip_suffix("/mcp")
+            .unwrap_or(trimmed)
+            .to_string();
+        if let Some(prefix) = without_mcp.strip_suffix(":4231") {
+            return format!("{prefix}:4233");
+        }
+
+        without_mcp
     }
 
     fn resolve_db_path(binary: &str) -> String {

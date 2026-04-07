@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use harmony_core::types::*;
 use chrono::{Utc, Duration, DateTime};
 use uuid::Uuid;
@@ -66,8 +66,9 @@ impl MemoryStore {
             "INSERT INTO provenance_tags (
                 id, actor_id, actor_kind, task_id, task_prompt,
                 timestamp, file_path, region_start_line, region_end_line,
-                region_start_col, region_end_col, mode, diff_unified, session_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                region_start_col, region_end_col, mode, diff_unified, session_id,
+                machine_name, machine_ip
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 tag.id.to_string(),
                 tag.actor_id.0,
@@ -83,6 +84,8 @@ impl MemoryStore {
                 mode,
                 tag.diff_unified,
                 tag.session_id.to_string(),
+                tag.machine_name,
+                tag.machine_ip,
             ],
         )?;
         Ok(())
@@ -100,7 +103,8 @@ impl MemoryStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, actor_id, actor_kind, task_id, task_prompt,
                     timestamp, file_path, region_start_line, region_end_line,
-                    region_start_col, region_end_col, mode, diff_unified, session_id
+                    region_start_col, region_end_col, mode, diff_unified, session_id,
+                    machine_name, machine_ip
              FROM provenance_tags
              WHERE file_path = ?1 AND timestamp > ?2
              ORDER BY timestamp DESC"
@@ -121,16 +125,18 @@ impl MemoryStore {
             let mode_str: String = row.get(11)?;
             let diff_unified: String = row.get(12)?;
             let session_id_str: String = row.get(13)?;
+            let machine_name: String = row.get(14)?;
+            let machine_ip: String = row.get(15)?;
 
             Ok((id_str, actor_id_str, actor_kind_str, task_id_str, task_prompt,
                 timestamp_str, file_path, start_line, end_line, start_col, end_col,
-                mode_str, diff_unified, session_id_str))
+                mode_str, diff_unified, session_id_str, machine_name, machine_ip))
         })?.collect::<Result<Vec<_>, _>>()?;
 
         let mut result = Vec::new();
         for (id_str, actor_id_str, actor_kind_str, task_id_str, task_prompt,
              timestamp_str, file_path, start_line, end_line, start_col, end_col,
-             mode_str, diff_unified, session_id_str) in tags
+             mode_str, diff_unified, session_id_str, machine_name, machine_ip) in tags
         {
             let actor_kind: ActorKind = serde_json::from_str(&actor_kind_str)
                 .unwrap_or(ActorKind::Human);
@@ -143,6 +149,8 @@ impl MemoryStore {
             result.push(ProvenanceTag {
                 id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
                 actor_id: ActorId(actor_id_str),
+                machine_name,
+                machine_ip,
                 actor_kind,
                 task_id: task_id_str.and_then(|s| Uuid::parse_str(&s).ok()),
                 task_prompt,
@@ -169,8 +177,8 @@ impl MemoryStore {
             "INSERT OR REPLACE INTO agents (
                 id, actor_id, role_name, role_avatar, role_desc,
                 status, mode, task_prompt, task_id, memory_health,
-                spawned_at, acp_endpoint, session_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                spawned_at, acp_endpoint, session_id, machine_name, machine_ip
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 agent.id.to_string(),
                 agent.actor_id.0,
@@ -185,6 +193,8 @@ impl MemoryStore {
                 agent.spawned_at.to_rfc3339(),
                 agent.acp_endpoint,
                 Uuid::new_v4().to_string(), // session_id
+                agent.machine_name,
+                agent.machine_ip,
             ],
         )?;
         Ok(())
@@ -194,7 +204,7 @@ impl MemoryStore {
         let mut stmt = self.conn.prepare(
             "SELECT id, actor_id, role_name, role_avatar, role_desc,
                     status, mode, task_prompt, task_id, memory_health,
-                    spawned_at, acp_endpoint
+                    spawned_at, acp_endpoint, machine_name, machine_ip
              FROM agents"
         )?;
 
@@ -211,20 +221,24 @@ impl MemoryStore {
             let memory_health_str: String = row.get(9)?;
             let spawned_at_str: String = row.get(10)?;
             let acp_endpoint: Option<String> = row.get(11)?;
+            let machine_name: String = row.get(12)?;
+            let machine_ip: String = row.get(13)?;
 
             Ok((id_str, actor_id_str, role_name, role_avatar, role_desc,
                 status_str, mode_str, task_prompt, task_id_str,
-                memory_health_str, spawned_at_str, acp_endpoint))
+                memory_health_str, spawned_at_str, acp_endpoint, machine_name, machine_ip))
         })?.collect::<Result<Vec<_>, _>>()?;
 
         let mut result = Vec::new();
         for (id_str, actor_id_str, role_name, role_avatar, role_desc,
              status_str, mode_str, task_prompt, task_id_str,
-             memory_health_str, spawned_at_str, acp_endpoint) in agents
+             memory_health_str, spawned_at_str, acp_endpoint, machine_name, machine_ip) in agents
         {
             result.push(Agent {
                 id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
                 actor_id: ActorId(actor_id_str),
+                machine_name,
+                machine_ip,
                 role: AgentRole { name: role_name, avatar_key: role_avatar, description: role_desc },
                 status: serde_json::from_str(&status_str).unwrap_or(AgentStatus::Idle),
                 mode: serde_json::from_str(&mode_str).unwrap_or(AgentMode::Shadow),
@@ -360,75 +374,151 @@ impl MemoryStore {
             OverlapStatus::Resolved(_) => Some(Utc::now().to_rfc3339()),
             _ => None,
         };
+        let resolution_kind = match &status {
+            OverlapStatus::Resolved(kind) => Some(serde_json::to_string(kind)?),
+            _ => None,
+        };
         self.conn.execute(
-            "UPDATE overlap_events SET status = ?1, resolved_at = ?2 WHERE id = ?3",
-            params![status_str, resolved_at, id.to_string()],
+            "UPDATE overlap_events SET status = ?1, resolved_at = ?2, resolution_kind = ?3 WHERE id = ?4",
+            params![status_str, resolved_at, resolution_kind, id.to_string()],
         )?;
         Ok(())
     }
 
     pub fn get_pending_overlaps(&self) -> anyhow::Result<Vec<OverlapEvent>> {
-        // For now, return minimal overlap events (without full provenance tags embedded)
-        // Full implementation requires joining provenance_tags
+        self.get_overlaps_filtered(Some(OverlapStatus::Pending))
+    }
+
+    pub fn get_all_overlaps(&self) -> anyhow::Result<Vec<OverlapEvent>> {
+        self.get_overlaps_filtered(None)
+    }
+
+    pub fn get_overlap(&self, id: Uuid) -> anyhow::Result<Option<OverlapEvent>> {
         let mut stmt = self.conn.prepare(
             "SELECT oe.id, oe.file_path, oe.region_a_start, oe.region_a_end,
                     oe.region_b_start, oe.region_b_end, oe.detected_at, oe.status,
                     oe.change_a_id, oe.change_b_id
              FROM overlap_events oe
-             WHERE oe.status = '\"pending\"'"
+             WHERE oe.id = ?1"
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            let id_str: String = row.get(0)?;
-            let file_path: String = row.get(1)?;
-            let ra_start: u32 = row.get(2)?;
-            let ra_end: u32 = row.get(3)?;
-            let rb_start: u32 = row.get(4)?;
-            let rb_end: u32 = row.get(5)?;
-            let detected_at_str: String = row.get(6)?;
-            let status_str: String = row.get(7)?;
-            let change_a_id: String = row.get(8)?;
-            let change_b_id: String = row.get(9)?;
-            Ok((id_str, file_path, ra_start, ra_end, rb_start, rb_end,
-                detected_at_str, status_str, change_a_id, change_b_id))
-        })?.collect::<Result<Vec<_>, _>>()?;
+        let row = stmt
+            .query_row(params![id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, u32>(4)?,
+                    row.get::<_, u32>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            })
+            .optional()?;
 
-        let mut result = Vec::new();
-        for (id_str, file_path, ra_start, ra_end, rb_start, rb_end,
-             detected_at_str, _status_str, change_a_id_str, change_b_id_str) in rows
-        {
-            // Fetch the actual provenance tags
-            let change_a = self.get_provenance_tag(&change_a_id_str)?;
-            let change_b = self.get_provenance_tag(&change_b_id_str)?;
-
-            if let (Some(change_a), Some(change_b)) = (change_a, change_b) {
-                result.push(OverlapEvent {
-                    id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
-                    file_path,
-                    region_a: TextRange { start_line: ra_start, end_line: ra_end, start_col: 0, end_col: 0 },
-                    region_b: TextRange { start_line: rb_start, end_line: rb_end, start_col: 0, end_col: 0 },
-                    change_a,
-                    change_b,
-                    detected_at: DateTime::parse_from_rfc3339(&detected_at_str)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(|_| Utc::now()),
-                    status: OverlapStatus::Pending,
-                });
-            }
-        }
-        Ok(result)
+        row.map(|row| self.hydrate_overlap_event(row)).transpose()
     }
 
-    pub fn get_overlap(&self, id: Uuid) -> anyhow::Result<Option<OverlapEvent>> {
-        let overlaps = self.get_pending_overlaps()?;
-        Ok(overlaps.into_iter().find(|o| o.id == id))
+    fn get_overlaps_filtered(
+        &self,
+        status_filter: Option<OverlapStatus>,
+    ) -> anyhow::Result<Vec<OverlapEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT oe.id, oe.file_path, oe.region_a_start, oe.region_a_end,
+                    oe.region_b_start, oe.region_b_end, oe.detected_at, oe.status,
+                    oe.change_a_id, oe.change_b_id
+             FROM overlap_events oe
+             ORDER BY oe.detected_at DESC"
+        )?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, u32>(4)?,
+                    row.get::<_, u32>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut overlaps = Vec::new();
+        for row in rows {
+            let event = self.hydrate_overlap_event(row)?;
+            if let Some(filter) = &status_filter {
+                if &event.status != filter {
+                    continue;
+                }
+            }
+            overlaps.push(event);
+        }
+
+        Ok(overlaps)
+    }
+
+    fn hydrate_overlap_event(
+        &self,
+        row: (String, String, u32, u32, u32, u32, String, String, String, String),
+    ) -> anyhow::Result<OverlapEvent> {
+        let (
+            id_str,
+            file_path,
+            ra_start,
+            ra_end,
+            rb_start,
+            rb_end,
+            detected_at_str,
+            status_str,
+            change_a_id_str,
+            change_b_id_str,
+        ) = row;
+
+        let change_a = self
+            .get_provenance_tag(&change_a_id_str)?
+            .ok_or_else(|| anyhow::anyhow!("Missing provenance tag {}", change_a_id_str))?;
+        let change_b = self
+            .get_provenance_tag(&change_b_id_str)?
+            .ok_or_else(|| anyhow::anyhow!("Missing provenance tag {}", change_b_id_str))?;
+
+        Ok(OverlapEvent {
+            id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
+            file_path,
+            region_a: TextRange {
+                start_line: ra_start,
+                end_line: ra_end,
+                start_col: 0,
+                end_col: 0,
+            },
+            region_b: TextRange {
+                start_line: rb_start,
+                end_line: rb_end,
+                start_col: 0,
+                end_col: 0,
+            },
+            change_a,
+            change_b,
+            detected_at: DateTime::parse_from_rfc3339(&detected_at_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+            status: serde_json::from_str(&status_str).unwrap_or(OverlapStatus::Pending),
+        })
     }
 
     fn get_provenance_tag(&self, id_str: &str) -> anyhow::Result<Option<ProvenanceTag>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, actor_id, actor_kind, task_id, task_prompt,
                     timestamp, file_path, region_start_line, region_end_line,
-                    region_start_col, region_end_col, mode, diff_unified, session_id
+                    region_start_col, region_end_col, mode, diff_unified, session_id,
+                    machine_name, machine_ip
              FROM provenance_tags WHERE id = ?1"
         )?;
 
@@ -447,19 +537,23 @@ impl MemoryStore {
             let mode_str: String = row.get(11)?;
             let diff_unified: String = row.get(12)?;
             let session_id_str: String = row.get(13)?;
+            let machine_name: String = row.get(14)?;
+            let machine_ip: String = row.get(15)?;
 
             Ok((id_str, actor_id_str, actor_kind_str, task_id_str, task_prompt,
                 timestamp_str, file_path, start_line, end_line, start_col, end_col,
-                mode_str, diff_unified, session_id_str))
+                mode_str, diff_unified, session_id_str, machine_name, machine_ip))
         });
 
         match result {
             Ok((id_str, actor_id_str, actor_kind_str, task_id_str, task_prompt,
                 timestamp_str, file_path, start_line, end_line, start_col, end_col,
-                mode_str, diff_unified, session_id_str)) => {
+                mode_str, diff_unified, session_id_str, machine_name, machine_ip)) => {
                 Ok(Some(ProvenanceTag {
                     id: Uuid::parse_str(&id_str).unwrap_or_else(|_| Uuid::new_v4()),
                     actor_id: ActorId(actor_id_str),
+                    machine_name,
+                    machine_ip,
                     actor_kind: serde_json::from_str(&actor_kind_str).unwrap_or(ActorKind::Human),
                     task_id: task_id_str.and_then(|s| Uuid::parse_str(&s).ok()),
                     task_prompt,
@@ -695,6 +789,8 @@ mod tests {
         ProvenanceTag {
             id: Uuid::new_v4(),
             actor_id: ActorId(actor_id.to_string()),
+            machine_name: "local".to_string(),
+            machine_ip: "127.0.0.1".to_string(),
             actor_kind: if actor_id.starts_with("human:") { ActorKind::Human } else { ActorKind::Agent },
             task_id: None,
             task_prompt: None,
@@ -801,6 +897,8 @@ mod tests {
         let agent = Agent {
             id: Uuid::new_v4(),
             actor_id: ActorId("agent:coder-01".to_string()),
+            machine_name: "local".to_string(),
+            machine_ip: "127.0.0.1".to_string(),
             role: AgentRole {
                 name: "Coder".to_string(),
                 avatar_key: "agent-coder".to_string(),

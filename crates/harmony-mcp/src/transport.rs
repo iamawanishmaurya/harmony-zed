@@ -1,7 +1,11 @@
-use std::sync::{Arc, Mutex};
 use std::io::{self, BufRead, Write};
+use std::sync::{Arc, Mutex};
+
 use harmony_memory::store::MemoryStore;
+use reqwest::Client;
+
 use crate::tools;
+use crate::types::{RequestContext, MACHINE_IP_HEADER, MACHINE_NAME_HEADER};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StdioMessageFormat {
@@ -16,38 +20,101 @@ pub async fn run_stdio_server(store: Arc<Mutex<MemoryStore>>) -> anyhow::Result<
 
     let mut reader = stdin.lock();
     let mut writer = stdout.lock();
+    let request_context = RequestContext::local();
 
     debug_log(&format!("stdio server started pid={}", std::process::id()));
 
     loop {
         let (body_str, message_format) = match read_stdio_message(&mut reader) {
-            Ok(message) => {
-                debug_log(&format!("resolved message format={message_format:?}", message_format = message.1));
-                message
-            }
+            Ok(message) => message,
             Err(error) => {
                 debug_log(&format!("read_stdio_message ended: {error}"));
                 break;
             }
         };
-        debug_log(&format!("received body: {}", body_str));
-        tracing::debug!("Received: {}", body_str);
 
-        // Parse and handle the request
-        let response = handle_request(&body_str, &store);
-
-        if let Some(response) = response {
+        if let Some(response) = handle_request(&body_str, &store, &request_context) {
             let response_str = serde_json::to_string(&response)?;
             write_stdio_response(&mut writer, message_format, &response_str)?;
             writer.flush()?;
-            debug_log(&format!("sent response: {}", response_str));
-            tracing::debug!("Sent: {}", response_str);
-        } else {
-            debug_log("request produced no response");
         }
     }
 
     debug_log("stdio server exiting");
+    Ok(())
+}
+
+/// Proxy stdin/stdout MCP traffic to an HTTP MCP endpoint while preserving the caller's framing.
+pub async fn run_stdio_http_bridge(
+    target_mcp_url: &str,
+    request_context: &RequestContext,
+) -> anyhow::Result<()> {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let client = Client::new();
+
+    let mut reader = stdin.lock();
+    let mut writer = stdout.lock();
+
+    debug_log(&format!(
+        "stdio bridge started pid={} target={}",
+        std::process::id(),
+        target_mcp_url
+    ));
+
+    loop {
+        let (body_str, message_format) = match read_stdio_message(&mut reader) {
+            Ok(message) => message,
+            Err(error) => {
+                debug_log(&format!("stdio bridge ended: {error}"));
+                break;
+            }
+        };
+
+        let request_value: serde_json::Value = match serde_json::from_str(&body_str) {
+            Ok(value) => value,
+            Err(error) => {
+                let response = jsonrpc_error(None, -32700, format!("Parse error: {error}"));
+                let response_str = serde_json::to_string(&response)?;
+                write_stdio_response(&mut writer, message_format, &response_str)?;
+                writer.flush()?;
+                continue;
+            }
+        };
+
+        let response = client
+            .post(target_mcp_url)
+            .header(MACHINE_NAME_HEADER, &request_context.machine_name)
+            .header(MACHINE_IP_HEADER, &request_context.machine_ip)
+            .json(&request_value)
+            .send()
+            .await;
+
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                let response = jsonrpc_error(
+                    request_value.get("id").cloned(),
+                    -32603,
+                    format!("Bridge request failed: {error}"),
+                );
+                let response_str = serde_json::to_string(&response)?;
+                write_stdio_response(&mut writer, message_format, &response_str)?;
+                writer.flush()?;
+                continue;
+            }
+        };
+
+        if response.status() == reqwest::StatusCode::NO_CONTENT {
+            continue;
+        }
+
+        let response_value: serde_json::Value = response.json().await?;
+        let response_str = serde_json::to_string(&response_value)?;
+        write_stdio_response(&mut writer, message_format, &response_str)?;
+        writer.flush()?;
+    }
+
     Ok(())
 }
 
@@ -63,14 +130,13 @@ pub async fn start_ipc_server(
     project_root: &std::path::Path,
     store: Arc<Mutex<MemoryStore>>,
 ) -> anyhow::Result<()> {
-    use tokio::net::TcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
 
     let addr = "127.0.0.1:17432";
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("IPC TCP server listening on {}", addr);
 
-    // Write the port file so the extension can find us
     let port_file = project_root.join(".harmony").join("harmony.port");
     if let Some(parent) = port_file.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -81,6 +147,7 @@ pub async fn start_ipc_server(
     loop {
         let (mut socket, peer) = listener.accept().await?;
         let store = store.clone();
+        let request_context = RequestContext::local();
         tracing::debug!("IPC client connected: {}", peer);
 
         tokio::spawn(async move {
@@ -88,29 +155,30 @@ pub async fn start_ipc_server(
             let mut reader = BufReader::new(reader_half);
 
             loop {
-                // Read Content-Length header
                 let mut header_line = String::new();
                 let content_length = match read_async_content_length(&mut reader, &mut header_line).await {
                     Ok(len) => len,
                     Err(_) => return,
                 };
 
-                // Read JSON body
                 let mut body = vec![0u8; content_length];
                 if reader.read_exact(&mut body).await.is_err() {
                     return;
                 }
 
                 let body_str = String::from_utf8_lossy(&body).to_string();
-                tracing::debug!("TCP received: {}", body_str);
-
-                let response = handle_request(&body_str, &store);
-                if let Some(response) = response {
+                if let Some(response) = handle_request(&body_str, &store, &request_context) {
                     if let Ok(response_str) = serde_json::to_string(&response) {
                         let header = format!("Content-Length: {}\r\n\r\n", response_str.len());
-                        if writer_half.write_all(header.as_bytes()).await.is_err() { return; }
-                        if writer_half.write_all(response_str.as_bytes()).await.is_err() { return; }
-                        if writer_half.flush().await.is_err() { return; }
+                        if writer_half.write_all(header.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        if writer_half.write_all(response_str.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        if writer_half.flush().await.is_err() {
+                            return;
+                        }
                     }
                 }
             }
@@ -124,15 +192,14 @@ pub async fn start_ipc_server(
     project_root: &std::path::Path,
     store: Arc<Mutex<MemoryStore>>,
 ) -> anyhow::Result<()> {
-    use tokio::net::UnixListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
 
     let socket_path = project_root.join(".harmony").join("harmony.sock");
     if let Some(parent) = socket_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    // Remove stale socket file
     let _ = tokio::fs::remove_file(&socket_path).await;
 
     let listener = UnixListener::bind(&socket_path)?;
@@ -141,13 +208,13 @@ pub async fn start_ipc_server(
     loop {
         let (mut socket, _) = listener.accept().await?;
         let store = store.clone();
+        let request_context = RequestContext::local();
 
         tokio::spawn(async move {
             let (reader_half, mut writer_half) = socket.split();
             let mut reader = BufReader::new(reader_half);
 
             loop {
-                // Read Content-Length header
                 let mut header_line = String::new();
                 let content_length = match read_async_content_length(&mut reader, &mut header_line).await {
                     Ok(len) => len,
@@ -155,26 +222,29 @@ pub async fn start_ipc_server(
                 };
 
                 let mut body = vec![0u8; content_length];
-                if reader.read_exact(&mut body).await.is_err() { return; }
+                if reader.read_exact(&mut body).await.is_err() {
+                    return;
+                }
 
                 let body_str = String::from_utf8_lossy(&body).to_string();
-                tracing::debug!("Unix received: {}", body_str);
-
-                let response = handle_request(&body_str, &store);
-                if let Some(response) = response {
+                if let Some(response) = handle_request(&body_str, &store, &request_context) {
                     if let Ok(response_str) = serde_json::to_string(&response) {
                         let header = format!("Content-Length: {}\r\n\r\n", response_str.len());
-                        if writer_half.write_all(header.as_bytes()).await.is_err() { return; }
-                        if writer_half.write_all(response_str.as_bytes()).await.is_err() { return; }
-                        if writer_half.flush().await.is_err() { return; }
+                        if writer_half.write_all(header.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        if writer_half.write_all(response_str.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        if writer_half.flush().await.is_err() {
+                            return;
+                        }
                     }
                 }
             }
         });
     }
 }
-
-// Shared Protocol
 
 fn read_stdio_message<R: BufRead>(reader: &mut R) -> anyhow::Result<(String, StdioMessageFormat)> {
     let mut header_line = String::new();
@@ -188,7 +258,6 @@ fn read_stdio_message<R: BufRead>(reader: &mut R) -> anyhow::Result<(String, Std
         }
 
         let trimmed = header_line.trim();
-        debug_log(&format!("header line: {:?}", trimmed));
         if trimmed.is_empty() {
             if let Some(length) = content_length {
                 let mut body = vec![0u8; length];
@@ -236,7 +305,6 @@ where
         }
 
         let trimmed = header_line.trim();
-        debug_log(&format!("async header line: {:?}", trimmed));
         if trimmed.is_empty() {
             if let Some(length) = content_length {
                 return Ok(length);
@@ -292,7 +360,11 @@ where
     }
 }
 
-fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_json::Value> {
+pub(crate) fn handle_request(
+    body: &str,
+    store: &Arc<Mutex<MemoryStore>>,
+    request_context: &RequestContext,
+) -> Option<serde_json::Value> {
     let request: serde_json::Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => {
@@ -302,7 +374,10 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
 
     let method = request.get("method")?.as_str()?;
     let id = request.get("id").cloned();
-    let params = request.get("params").cloned().unwrap_or(serde_json::json!({}));
+    let params = request
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     let result = match method {
         "initialize" => {
@@ -325,23 +400,19 @@ fn handle_request(body: &str, store: &Arc<Mutex<MemoryStore>>) -> Option<serde_j
             }))
         }
         "notifications/initialized" | "initialized" => {
-            // Notification, no response needed
             return None;
         }
-        "ping" => {
-            Some(serde_json::json!({}))
-        }
-        "tools/list" => {
-            Some(tools::list_tools())
-        }
+        "ping" => Some(serde_json::json!({})),
+        "tools/list" => Some(tools::list_tools()),
         "tools/call" => {
             let tool_name = params.get("name")?.as_str()?;
-            let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
-            Some(tools::call_tool(tool_name, &arguments, store))
+            let arguments = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            Some(tools::call_tool(tool_name, &arguments, store, request_context))
         }
-        "shutdown" => {
-            Some(serde_json::json!(null))
-        }
+        "shutdown" => Some(serde_json::json!(null)),
         _ => {
             if id.is_none() {
                 return None;
@@ -425,14 +496,19 @@ mod tests {
         handle_request, looks_like_json_message, read_stdio_message, write_stdio_response,
         StdioMessageFormat,
     };
+    use crate::types::RequestContext;
+    use harmony_memory::store::MemoryStore;
     use std::io::Cursor;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
-    use harmony_memory::store::MemoryStore;
 
     fn test_store() -> Arc<Mutex<MemoryStore>> {
         let store = MemoryStore::open(Path::new(":memory:")).expect("memory store");
         Arc::new(Mutex::new(store))
+    }
+
+    fn test_request_context() -> RequestContext {
+        RequestContext::new("local", "127.0.0.1")
     }
 
     #[test]
@@ -491,6 +567,7 @@ mod tests {
         let response = handle_request(
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"zed","version":"1.0.0"}}}"#,
             &test_store(),
+            &test_request_context(),
         )
         .expect("response");
 
@@ -509,6 +586,7 @@ mod tests {
         let response = handle_request(
             r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
             &test_store(),
+            &test_request_context(),
         );
 
         assert!(response.is_none());

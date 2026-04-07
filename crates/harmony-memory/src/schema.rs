@@ -7,6 +7,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("v003_memory_records", V003_MEMORY_RECORDS),
     ("v004_overlap_events", V004_OVERLAP_EVENTS),
     ("v005_tasks", V005_TASKS),
+    ("v006_machine_identity", V006_MACHINE_IDENTITY),
 ];
 
 pub const SCHEMA_VERSION_TABLE: &str = "
@@ -118,6 +119,16 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_message   TEXT,
     session_id      TEXT NOT NULL
 );
+";
+
+pub const V006_MACHINE_IDENTITY: &str = "
+ALTER TABLE provenance_tags ADD COLUMN machine_name TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE provenance_tags ADD COLUMN machine_ip TEXT NOT NULL DEFAULT '127.0.0.1';
+ALTER TABLE agents ADD COLUMN machine_name TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE agents ADD COLUMN machine_ip TEXT NOT NULL DEFAULT '127.0.0.1';
+
+CREATE INDEX IF NOT EXISTS idx_prov_machine ON provenance_tags(machine_name, machine_ip);
+CREATE INDEX IF NOT EXISTS idx_agents_machine ON agents(machine_name, machine_ip);
 ";
 
 /// SQLite connection settings (apply on every connection open)

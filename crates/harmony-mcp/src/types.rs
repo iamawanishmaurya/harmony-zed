@@ -35,3 +35,45 @@ pub const INVALID_REQUEST: i32 = -32600;
 pub const METHOD_NOT_FOUND: i32 = -32601;
 pub const INVALID_PARAMS: i32 = -32602;
 pub const INTERNAL_ERROR: i32 = -32603;
+
+pub const MACHINE_NAME_HEADER: &str = "x-harmony-machine-name";
+pub const MACHINE_IP_HEADER: &str = "x-harmony-machine-ip";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestContext {
+    pub machine_name: String,
+    pub machine_ip: String,
+}
+
+impl Default for RequestContext {
+    fn default() -> Self {
+        Self::local()
+    }
+}
+
+impl RequestContext {
+    pub fn new(machine_name: impl Into<String>, machine_ip: impl Into<String>) -> Self {
+        Self {
+            machine_name: machine_name.into(),
+            machine_ip: machine_ip.into(),
+        }
+    }
+
+    pub fn local() -> Self {
+        let machine_name = std::env::var("HARMONY_MACHINE_NAME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "local".to_string());
+        let machine_ip = std::env::var("HARMONY_MACHINE_IP")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+
+        Self {
+            machine_name,
+            machine_ip,
+        }
+    }
+}

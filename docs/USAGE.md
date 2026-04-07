@@ -1,178 +1,256 @@
-# Harmony — User Guide
+# Harmony - User Guide
 
-> How to set up, use, and troubleshoot Harmony for your projects.
-
----
-
-## Table of Contents
-
-1. [Quick Start](#quick-start)
-2. [Setup](#setup)
-3. [Configuration](#configuration)
-4. [Using Harmony](#using-harmony)
-5. [LLM Backend Setup](#llm-backend-setup)
-6. [Common Workflows](#common-workflows)
-7. [Troubleshooting](#troubleshooting)
-8. [How to Report a Bug to Me](#how-to-report-a-bug-to-me)
+> Current, verified workflow for running Harmony with Zed and a project-local `.harmony` database.
 
 ---
 
 ## Quick Start
 
-```bash
-# 1. Clone and build
-git clone <your-repo-url>
-cd Harmony
+### Platform note
+
+- On Windows, use the PowerShell commands in this document.
+- On Linux, use the same flow with the binary at `./target/release/harmony-mcp` and forward-slash paths such as `/path/to/project/.harmony/memory.db`.
+
+### 1. Build the native sidecar
+
+```powershell
 cargo build --release -p harmony-mcp
-
-# 2. Run in any project
-cd /path/to/your/project
-/path/to/harmony-mcp --db-path .harmony/memory.db
-
-# 3. A config file is auto-created at .harmony/config.toml
-#    Edit it to set your preferred LLM backend
 ```
 
-That's it. Harmony is now tracking changes in your project.
-
----
-
-## Setup
-
-### Prerequisites
-
-| Tool | Version | Install |
-|------|---------|---------|
-| **Rust** | 1.80+ | `winget install Rustlang.Rust.MSVC` (Windows) or `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` (Linux) |
-| **Git** | any | Already installed |
-| **SQLite** | bundled | Comes with `rusqlite` — no install needed |
-
-### Build from Source
+Linux:
 
 ```bash
-# Clone
-git clone <repo-url> Harmony
-cd Harmony
-
-# 2. Build the sidecar binary (the only thing you need to run)
 cargo build --release -p harmony-mcp
-
-# 3. Load into Zed (IMPORTANT)
-# Open Zed's Command Palette -> "zed: install dev extension"
-# Select this folder: /path/to/harmony-zed/crates/harmony-extension
-# (Do NOT select the root project folder, as Zed requires isolated Cargo packages)
-
-# 4. The binary is at:
-#   Windows: target\release\harmony-mcp.exe
-#   Linux:   target/release/harmony-mcp
 ```
 
-### Verify Installation
+### 2. Install the dev extension in Zed
 
-```bash
-# Run all tests to make sure everything works
-cargo test -p harmony-core -p harmony-memory -p harmony-analyzer
+Use `zed: install dev extension` and select:
 
-# Expected: 95 passed, 0 failed
+```text
+<repo>\crates\harmony-extension
 ```
 
----
+Do not select the workspace root.
 
-## Configuration
+### 3. Open the project you want Harmony to track
 
-### Auto-Generated Config
+Harmony stores data in that project's own `.harmony` folder:
 
-The first time Harmony runs in a project, it creates `.harmony/config.toml` with sensible defaults and commented examples for every LLM backend.
-
-```
+```text
 your-project/
-├── .harmony/
-│   ├── config.toml    ← Your settings (auto-created)
-│   ├── memory.db      ← SQLite database (auto-created)
-│   ├── harmony.port   ← TCP port file (Windows only)
-│   └── harmony.sock   ← Unix socket (Linux/macOS only)
-├── src/
-└── ...
+  .harmony/
+    config.toml
+    memory.db
+    mcp-debug.log
+    agent-sync-state.json
 ```
 
-### Key Settings
+### 4. Configure Harmony in Zed
 
-Open `.harmony/config.toml` and edit these sections:
+Open the Harmony context server and click `Configure Server`.
 
-#### Your Identity
+Zed starts `harmony-mcp` itself. You do not need to run a separate `.bat` file for normal editor use.
 
-```toml
-[human]
-username = "awanish"           # Your display name
-actor_id = "human:awanish"     # Used in provenance tags
+### 5. Verify the connection
+
+In a tool-enabled Agent chat, run:
+
+```text
+run the harmony_pulse tool
 ```
 
-#### Overlap Detection Window
+Or use the slash command:
 
-```toml
-[general]
-overlap_window_minutes = 30    # How far back to check for conflicts
+```text
+/harmony-pulse
 ```
 
-#### LLM Backend (most important)
+### 6. After assistant file edits, sync them into Harmony
 
-```toml
-[negotiation]
-negotiation_backend = "agent"  # Change to "openai", "anthropic", or "disabled"
-# See "LLM Backend Setup" section below for full examples
+Use:
+
+```text
+/harmony-sync
 ```
 
-#### Ghost Highlight Colors
+If you want to sync one file explicitly:
 
-```toml
-[ui]
-ghost_add_color = "#7ee8a280"      # Green glow for agent additions
-ghost_remove_color = "#f0606060"   # Red glow for agent removals
+```text
+/harmony-sync path/to/file
+```
+
+Then run `harmony_pulse` or `/harmony-pulse` again.
+
+---
+
+## What Works Today
+
+Harmony currently supports these verified workflows:
+
+- Zed context-server startup through `Configure Server`
+- Project-local `.harmony\memory.db` selection based on the open project
+- MCP tool `harmony_pulse`
+- MCP tool `report_file_edit`
+- Raw MCP tool `report_change`
+- Slash commands `/harmony-pulse` and `/harmony-sync`
+- Native CLI commands `doctor`, `pulse`, `sync`, and default `serve`
+
+The current Zed extension does not yet have a true "assistant just edited this file" event hook, so `/harmony-sync` is the reliable extension-side bridge after assistant edits.
+
+---
+
+## Prerequisites
+
+| Tool | Notes |
+|------|-------|
+| Rust | Required to build `harmony-mcp` and the Zed extension |
+| `wasm32-wasip2` target | Required for `harmony-extension` builds |
+| Zed | Required for the extension workflow |
+
+Install the WASM target once:
+
+```powershell
+rustup target add wasm32-wasip2
 ```
 
 ---
 
-## Using Harmony
+## Build Commands
 
-### What Harmony Tracks
+### Native sidecar
 
-Every code change made by any participant (human or AI agent) is stored as a **provenance tag** containing:
-- **Who** changed it (e.g., `human:awanish` or `agent:architect-01`)
-- **What** changed (unified diff)
-- **Where** (file path + line range)
-- **When** (timestamp)
-- **Why** (the task prompt that motivated the change)
-
-### What Happens When Changes Overlap
-
-```
-You edit auth.ts lines 10–25        Agent edits auth.ts lines 15–30
-         │                                    │
-         └────────── OVERLAP! ────────────────┘
-                      │
-              Harmony detects it
-                      │
-         ┌────────────┼────────────┐
-         │            │            │
-    [Accept Mine] [Accept Theirs] [Negotiate ✨]
+```powershell
+cargo build --release -p harmony-mcp
 ```
 
-1. **Accept Mine** — Keep your changes, discard the agent's
-2. **Accept Theirs** — Keep the agent's changes, discard yours
-3. **Negotiate** — Send both diffs to the LLM, get a merged version
+### Extension WASM
 
-### MCP Tools Available
+```powershell
+cargo build --release -p harmony-extension --target wasm32-wasip2
+```
 
-The sidecar exposes these tools via JSON-RPC:
+### Verify the sidecar outside Zed
 
-| Tool | What It Does |
-|------|-------------|
-| `report_change` | Record a new code change (triggers overlap detection) |
-| `query_memory` | Search team memory by keyword/semantic similarity |
-| `add_memory` | Add a note to team memory |
-| `list_decisions` | List past negotiation decisions |
+```powershell
+.\target\release\harmony-mcp.exe doctor --db-path C:\path\to\project\.harmony\memory.db
+```
 
-### Example: Report a Change
+Linux:
+
+```bash
+./target/release/harmony-mcp doctor --db-path /path/to/project/.harmony/memory.db
+```
+
+### Print a one-shot project status
+
+```powershell
+.\target\release\harmony-mcp.exe pulse --db-path C:\path\to\project\.harmony\memory.db
+```
+
+Linux:
+
+```bash
+./target/release/harmony-mcp pulse --db-path /path/to/project/.harmony/memory.db
+```
+
+### Sync recent or explicit files from the CLI
+
+```powershell
+.\target\release\harmony-mcp.exe sync --db-path C:\path\to\project\.harmony\memory.db
+```
+
+Linux:
+
+```bash
+./target/release/harmony-mcp sync --db-path /path/to/project/.harmony/memory.db
+```
+
+Explicit file sync:
+
+```powershell
+.\target\release\harmony-mcp.exe sync --db-path C:\path\to\project\.harmony\memory.db --file src\app.ts --actor-id agent:zed-assistant
+```
+
+---
+
+## Harmony Files
+
+Harmony creates and uses these project-local files:
+
+| File | Purpose |
+|------|---------|
+| `.harmony/config.toml` | Project configuration |
+| `.harmony/memory.db` | SQLite database with provenance, agents, overlaps, and memory |
+| `.harmony/mcp-debug.log` | Sidecar debug log |
+| `.harmony/agent-sync-state.json` | Tracks which files were already synced by `/harmony-sync` or `harmony-mcp sync` |
+
+---
+
+## MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `harmony_pulse` | Show project, database, registered agents, and pending overlaps |
+| `report_file_edit` | Record a file edit without requiring a full handcrafted diff |
+| `report_change` | Record a raw diff and line range directly |
+| `query_memory` | Query shared memory |
+| `add_memory` | Store a shared memory record |
+| `list_decisions` | List stored decision records |
+
+### When to use each edit-reporting tool
+
+- Use `report_file_edit` when an agent changed a file and you want Harmony to track it quickly.
+- Use `report_change` when you already have the exact unified diff and line range.
+- Use `/harmony-sync` when you are inside Zed and want the extension to sweep recent assistant edits into Harmony.
+
+---
+
+## Slash Commands
+
+| Slash command | Purpose |
+|---------------|---------|
+| `/harmony-pulse` | Run a one-shot status check through the native sidecar |
+| `/harmony-sync` | Sync recently modified project files into Harmony as assistant edits |
+| `/harmony-sync path/to/file` | Sync one explicit file |
+
+### Important distinction
+
+- `harmony_pulse` is the MCP tool used inside tool-enabled Agent chats.
+- `/harmony-pulse` is the Zed slash command exposed by the extension.
+
+They surface the same project status, but they are different integration surfaces.
+
+---
+
+## Common Zed Workflows
+
+### Check that Harmony is connected
+
+1. Open a project in Zed.
+2. Configure the Harmony context server.
+3. Run `harmony_pulse` in chat or `/harmony-pulse`.
+4. Confirm the project path and database path point at the project you opened.
+
+### Track an assistant edit
+
+1. Ask the assistant to create or edit a file.
+2. Run `/harmony-sync`.
+3. Run `harmony_pulse`.
+4. Confirm `Registered agents` is at least `1`.
+
+### Create and detect an overlap
+
+1. Let the assistant edit a file.
+2. Run `/harmony-sync`.
+3. Make a manual edit in the same file and same line area.
+4. Record the human edit through your own integration or a raw `report_change` call.
+5. Run `harmony_pulse`.
+6. Confirm `Pending overlaps` increased.
+
+---
+
+## Example: `report_file_edit`
 
 ```json
 {
@@ -180,374 +258,70 @@ The sidecar exposes these tools via JSON-RPC:
   "id": 1,
   "method": "tools/call",
   "params": {
-    "name": "report_change",
+    "name": "report_file_edit",
     "arguments": {
-      "actor_id": "human:awanish",
-      "file_path": "src/auth.ts",
-      "start_line": 10,
-      "end_line": 25,
-      "diff": "@@ -10,5 +10,8 @@\n+const validated = true;"
+      "actor_id": "agent:copilot",
+      "file_path": "src/app.ts",
+      "content": "console.log('hello');\n",
+      "task_prompt": "Created a small logging helper"
     }
   }
 }
-```
-
-### Example: Query Team Memory
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 2,
-  "method": "tools/call",
-  "params": {
-    "name": "query_memory",
-    "arguments": {
-      "query": "why was Redis rejected?"
-    }
-  }
-}
-```
-
----
-
-## LLM Backend Setup
-
-### Option 1: GitHub Models (Recommended for Testing)
-
-Free with a GitHub PAT. No credit card needed.
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "github_pat_..."
-model = "gpt-4o-mini"
-base_url = "https://models.inference.ai.azure.com"
-```
-
-**Setup:**
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
-2. Create a fine-grained PAT with AI model access
-3. Set it as an env var: `$env:HARMONY_GITHUB_TOKEN = "github_pat_..."`
-4. Or paste it directly in `config.toml` (less secure)
-
-### Option 2: OpenAI
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "sk-..."
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-```
-
-### Option 3: Anthropic Claude
-
-```toml
-[negotiation]
-negotiation_backend = "anthropic"
-api_key = "sk-ant-..."
-model = "claude-sonnet-4-6"
-```
-
-### Option 4: Ollama (100% Local, Free)
-
-```bash
-# Install Ollama
-# Windows: winget install Ollama.Ollama
-# Linux:   curl -fsSL https://ollama.ai/install.sh | sh
-
-# Pull a model
-ollama pull llama3.3
-
-# Start the server
-ollama serve
-```
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "ollama"
-model = "llama3.3"
-base_url = "http://localhost:11434/v1"
-```
-
-### Option 5: LM Studio (Local, GUI)
-
-1. Download from [lmstudio.ai](https://lmstudio.ai)
-2. Load any model → enable "Local Server"
-3. Configure:
-
-```toml
-[negotiation]
-negotiation_backend = "openai"
-api_key = "lm-studio"
-model = "local-model"
-base_url = "http://localhost:1234/v1"
-```
-
-### Option 6: Agent Delegation (Default)
-
-No API key needed. Delegates negotiation to a locally registered ACP agent.
-
-```toml
-[negotiation]
-negotiation_backend = "agent"
-
-[agents]
-[[agents.registry]]
-name = "opencode"
-endpoint = "http://localhost:4231"
-```
-
-### Option 7: Disabled
-
-```toml
-[negotiation]
-negotiation_backend = "disabled"
-```
-
-Overlaps are still detected, but the "Negotiate" button does nothing.
-
----
-
-## Common Workflows
-
-### Workflow 1: Check That Harmony Is Working
-
-```bash
-# Run all tests
-cargo test -p harmony-core -p harmony-memory -p harmony-analyzer
-# Expected: 95 passed
-
-# Run the E2E golden path test
-cargo test -p harmony-core --test e2e_golden_path -- --nocapture
-# Expected: 5 passed
-
-# Run a live API test (needs HARMONY_GITHUB_TOKEN env var)
-cargo test -p harmony-core --test live_backend_smoke -- --ignored --nocapture
-# Expected: 1 passed, valid NegotiationResult printed
-```
-
-### Workflow 2: Check Config Is Valid
-
-```bash
-# This test creates a temp config and verifies it loads correctly
-cargo test -p harmony-core -- test_load_creates_default --nocapture
-```
-
-### Workflow 3: View the Auto-Generated Config
-
-```bash
-# Delete existing config to regenerate
-rm .harmony/config.toml
-
-# Run harmony-mcp — it will auto-create the config
-./target/release/harmony-mcp --db-path .harmony/memory.db
-
-# Check the generated file
-cat .harmony/config.toml
-```
-
-### Workflow 4: Check Memory Database
-
-```bash
-# View all stored provenance tags
-sqlite3 .harmony/memory.db "SELECT actor_id, file_path, datetime(timestamp) FROM provenance_tags ORDER BY timestamp DESC LIMIT 10;"
-
-# View all memory notes
-sqlite3 .harmony/memory.db "SELECT namespace, content, datetime(created_at) FROM memory_records ORDER BY created_at DESC LIMIT 10;"
-
-# View detected overlaps
-sqlite3 .harmony/memory.db "SELECT file_path, status, datetime(detected_at) FROM overlap_events ORDER BY detected_at DESC LIMIT 10;"
 ```
 
 ---
 
 ## Troubleshooting
 
-### Build Issues
+| Problem | What to check |
+|---------|---------------|
+| `Failed to install dev extension` | Install from `crates/harmony-extension`, not the workspace root |
+| `Context server request timeout` | Rebuild `harmony-mcp`, reopen Zed, and inspect `.harmony/mcp-debug.log` plus `C:\Users\water\AppData\Local\Zed\logs\Zed.log` |
+| `harmony_pulse` points at the wrong project | Reopen the intended project folder and reconfigure the context server |
+| `Registered agents: 0` after an assistant edit | Run `/harmony-sync` or call `report_file_edit` |
+| `Pending overlaps: 0` after edits | Make sure both edits hit the same file and overlapping lines, and that both changes were reported into Harmony |
+| Zed cannot build the extension | Run `rustup target add wasm32-wasip2` |
 
-| Problem | Solution |
-|---------|----------|
-| `cargo build` fails with missing target | Run `rustup target add wasm32-wasip2` for extension builds |
-| Linker error on Windows | Install Visual Studio Build Tools: `winget install Microsoft.VisualStudio.2022.BuildTools` |
-| `rusqlite` linking error | SQLite is bundled via `bundled` feature — should just work. If not, install `libsqlite3-dev` on Linux |
+### Useful log commands
 
-### Config Issues
-
-| Problem | Solution |
-|---------|----------|
-| Config not found | Harmony auto-creates `.harmony/config.toml` on first run |
-| Config parse error | Check for TOML syntax errors. Run `toml-lint .harmony/config.toml` or paste contents into [toml-lint.com](https://www.toml-lint.com) |
-| Wrong username | Edit `[human].username` in `.harmony/config.toml` |
-
-### LLM Backend Issues
-
-| Problem | Solution |
-|---------|----------|
-| `NegotiationNotConfigured` | The `negotiation_backend` key is missing, misspelled, or set to `"disabled"` |
-| `401 Unauthorized` (OpenAI) | Your `api_key` is invalid or expired. Regenerate at [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| `401 Unauthorized` (Anthropic) | Missing `anthropic-version` header. This is a code bug — report it |
-| `401 Unauthorized` (GitHub) | Your PAT doesn't have AI model access. Regenerate at [github.com/settings/tokens](https://github.com/settings/tokens) |
-| `NegotiationInvalidResponse` | The LLM returned non-JSON output. Try a different model (gpt-4o is more reliable than gpt-3.5) |
-| `Connection refused` (Ollama) | Ollama isn't running. Start it with `ollama serve` |
-| `Connection refused` (LM Studio) | LM Studio's local server isn't enabled. Click "Start Server" in the UI |
-| Timeout | The model is too slow. Try `gpt-4o-mini` instead of `gpt-4o`, or use a smaller Ollama model |
-
-### IPC Issues (Sidecar Connection)
-
-| Problem | Solution |
-|---------|----------|
-| Extension can't find sidecar (Windows) | Check `.harmony/harmony.port` exists and contains `127.0.0.1:17432` |
-| Extension can't find sidecar (Linux) | Check `.harmony/harmony.sock` exists: `ls -la .harmony/harmony.sock` |
-| Port 17432 already in use | Another instance of harmony-mcp is running. Kill it: `taskkill /IM harmony-mcp.exe /F` (Windows) or `pkill harmony-mcp` (Linux) |
-
----
-
-## How to Report a Bug to Me
-
-When you hit an issue and want me to help debug it, copy-paste this template into your message:
-
----
-
-### 🐛 Bug Report Template
-
-```
-**What I was trying to do:**
-[Describe the action, e.g., "Run the live backend smoke test with Ollama"]
-
-**What happened:**
-[Describe the error, e.g., "Got NegotiationInvalidResponse"]
-
-**Error output (copy-paste the full output):**
-```
-[Paste the FULL terminal output here, including any error messages]
+```powershell
+Get-Content -Tail 120 .harmony\mcp-debug.log
+Get-Content -Tail 120 C:\Users\water\AppData\Local\Zed\logs\Zed.log
 ```
 
-**My config (paste .harmony/config.toml negotiation section):**
-```toml
-[negotiation]
-negotiation_backend = "..."
-api_key = "REDACTED"
-model = "..."
-base_url = "..."
-```
-
-**My platform:**
-- OS: [Windows 11 / Arch Linux / macOS]
-- Rust version: [output of `rustc --version`]
-
-**Commands I ran:**
-```bash
-[Paste the exact commands you ran]
-```
-```
-
----
-
-### Quick Debug Commands (run these before reporting)
-
-These commands help me understand the state of your system:
+Linux:
 
 ```bash
-# 1. Check Rust version
-rustc --version
-
-# 2. Check if tests still pass
-cargo test -p harmony-core --test negotiation_tests 2>&1 | Select-String "test result"
-
-# 3. Check if the binary builds
-cargo build -p harmony-mcp 2>&1 | Select-String "error|Finished"
-
-# 4. Check your config loads properly
-cargo test -p harmony-core -- test_default_config --nocapture 2>&1 | Select-String "test |ok|FAILED"
-
-# 5. Check memory database integrity
-sqlite3 .harmony/memory.db "PRAGMA integrity_check;"
-# Expected: "ok"
-
-# 6. Show your config (REDACT api_key before sharing!)
-Get-Content .harmony\config.toml | Select-String -NotMatch "api_key"
-
-# 7. Check if the LLM endpoint is reachable
-# For GitHub Models:
-Invoke-WebRequest -Uri "https://models.inference.ai.azure.com" -Method HEAD
-# For Ollama:
-Invoke-WebRequest -Uri "http://localhost:11434/api/version" -Method GET
+tail -n 120 .harmony/mcp-debug.log
+tail -n 120 ~/.local/state/zed/logs/Zed.log
 ```
-
-### What I Need to See
-
-When you paste a bug report, I will:
-
-1. **Read the error message** to identify the error variant (`NegotiationInvalidResponse`, `NegotiationNotConfigured`, etc.)
-2. **Check your config** to see if the backend/api_key/base_url are correct
-3. **Run the relevant test** to reproduce the issue
-4. **Look at the specific code path** that produced the error
-5. **Fix and verify** with a test
-
-### Example Bug Report
-
-```
-**What I was trying to do:**
-Run the live backend test with Ollama locally
-
-**What happened:**
-Test passed but the proposed_diff was empty
-
-**Error output:**
-✅ SUCCESS!
-  proposed_diff: 0 chars
-  rationale: I cannot produce a diff without seeing the actual code.
-  confidence: 0.3
-  memory_notes: []
-
-**My config:**
-[negotiation]
-negotiation_backend = "openai"
-api_key = "ollama"
-model = "llama3.2:1b"
-base_url = "http://localhost:11434/v1"
-
-**My platform:**
-- OS: Arch Linux
-- Rust: rustc 1.82.0
-```
-
-**My diagnosis for this example:** The model (`llama3.2:1b`) is too small to produce valid JSON diffs. Switch to `llama3.3` or `codellama:13b`.
 
 ---
 
-## File Reference
+## Recommended Verification Sequence
 
-| File | What It Is |
-|------|-----------|
-| `.harmony/config.toml` | Your project settings (human identity, LLM backend, UI colors) |
-| `.harmony/memory.db` | SQLite database with all provenance tags, memory notes, overlaps |
-| `.harmony/harmony.port` | TCP port the sidecar is listening on (Windows only) |
-| `.harmony/harmony.sock` | Unix socket the sidecar is listening on (Linux/macOS only) |
-| `target/release/harmony-mcp` | The compiled sidecar binary |
-| `docs/PROJECT.md` | Architecture and key concepts |
-| `docs/OVERVIEW.md` | Implementation status and module descriptions |
-| `docs/TESTING.md` | Testing workflow (5 phases) |
-| `docs/USAGE.md` | This file |
+```powershell
+# 1. Run the full suite
+cargo test -p harmony-core -p harmony-memory -p harmony-analyzer -p harmony-mcp -p harmony-extension
+
+# 2. Build the sidecar
+cargo build --release -p harmony-mcp
+
+# 3. Build the extension
+cargo build --release -p harmony-extension --target wasm32-wasip2
+
+# 4. Verify a target project
+.\target\release\harmony-mcp.exe doctor --db-path C:\path\to\project\.harmony\memory.db
+```
 
 ---
 
 ## Security Notes
 
-- **Never share API keys in chat.** Use environment variables: `$env:MY_KEY = "sk-..."`
-- **Never commit `.harmony/config.toml` if it contains real API keys.** Add `.harmony/` to `.gitignore`
-- **Revoke any token that's been exposed** (even in an AI conversation)
-- **The memory database is local.** Nothing is sent to the cloud unless you configure an LLM backend
-
-### Recommended .gitignore Addition
-
-```gitignore
-# Harmony
-.harmony/
-```
+- Keep API keys out of git.
+- Treat `.harmony/config.toml` as sensitive if it contains real credentials.
+- Harmony data stays local unless you configure a remote negotiation backend.
 
 ---
 
-*Harmony v0.1.1 — Awanish Maurya · XPWNIT LAB · April 2026*
+*Last updated: 2026-04-07*

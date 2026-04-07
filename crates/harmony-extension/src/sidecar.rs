@@ -75,6 +75,7 @@ impl SidecarHandle {
     /// Get the CLI arguments for spawning the sidecar.
     pub fn spawn_args(&self) -> Vec<String> {
         vec![
+            "--stdio-bridge".to_string(),
             "--db-path".to_string(),
             self.config.db_path.clone(),
         ]

@@ -1,158 +1,181 @@
-# Harmony — Project Overview
+# Harmony - Project Overview
 
-> **Intelligent mediation for parallel human + AI development**
-
-Harmony is a Zed editor extension that makes simultaneous editing by humans and AI agents safe, transparent, and collaborative. When multiple participants modify the same codebase, Harmony detects conflicts before they become merge nightmares, analyzes the semantic impact using AST parsing, and helps resolve overlaps through AI-assisted negotiation — all without leaving your editor.
+> Intelligent mediation for parallel human + AI development inside Zed.
 
 ---
 
-## What Problem Does Harmony Solve?
+## What Problem Harmony Solves
 
-Modern development increasingly involves AI agents (Copilot, Cursor, Claude Code, etc.) working alongside human developers. When a human is editing `auth.ts` line 44–67 to fix JWT validation while an AI agent simultaneously adds Redis caching at lines 52–71, **nobody knows about the conflict until a git merge fails hours later**.
+Harmony helps when a human and an AI assistant both work on the same project and risk silently editing the same file region.
 
-Harmony solves this by:
-1. **Tracking every change** with full provenance (who, what, where, when, why)
-2. **Detecting overlaps in real-time** when two participants touch the same file region
-3. **Analyzing impact** using Tree-sitter AST diffing + optional LSP dependency lookup
-4. **Surfacing non-intrusive notifications** with plain-English summaries
-5. **Enabling AI-assisted merge negotiation** that proposes unified diffs
+Instead of waiting for that conflict to show up later in git, Harmony records edit provenance early:
+
+- who changed a file
+- which file and line range changed
+- when it changed
+- why it changed
+- whether the new change overlaps an existing one
+
+That makes overlap detection visible while work is still in progress.
+
+---
+
+## Current Practical Model
+
+Today, Harmony works best as a project-local tracking layer for:
+
+- Zed context-server startup
+- assistant edit reporting
+- human/agent overlap detection
+- lightweight project memory
+
+The current practical loop is:
+
+```text
+assistant edits file
+-> /harmony-sync
+-> Harmony records agent provenance
+-> human edits same file region
+-> Harmony records human provenance
+-> harmony_pulse reports the overlap
+```
+
+The `sync` step exists because the current Zed Rust extension API does not expose a direct "assistant just edited this file" callback yet.
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Zed Editor                           │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │        harmony-extension (WASM)                  │   │
-│  │  • Agent Team Panel (Cmd+Shift+T)                │   │
-│  │  • Harmony Pulse Panel (Cmd+Shift+H)             │   │
-│  │  • Ghost highlight decorations                   │   │
-│  └────────────────────┬─────────────────────────────┘   │
-│                       │ stdin/stdout (JSON-RPC)         │
-│  ┌────────────────────▼─────────────────────────────┐   │
-│  │        harmony-mcp (native sidecar)              │   │
-│  │  ┌──────────────────────────────────────────┐    │   │
-│  │  │  harmony-core     │  harmony-analyzer    │    │   │
-│  │  │  • Types          │  • Tree-sitter       │    │   │
-│  │  │  • Overlap Detect │  • Impact Analysis   │    │   │
-│  │  │  • Shadow Diff    │  • LSP Client        │    │   │
-│  │  │  • Negotiation    │                      │    │   │
-│  │  │  • Config Loader  │                      │    │   │
-│  │  │  • Sandbox        │                      │    │   │
-│  │  └──────────────────────────────────────────┘    │   │
-│  │  ┌──────────────────────────────────────────┐    │   │
-│  │  │  harmony-memory                          │    │   │
-│  │  │  • SQLite Store (provenance, agents,     │    │   │
-│  │  │    memory records, overlaps)             │    │   │
-│  │  │  • Embedding Engine (keyword fallback    │    │   │
-│  │  │    or neural BGE-Small-EN-v1.5)          │    │   │
-│  │  └──────────────────────────────────────────┘    │   │
-│  └──────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+```text
+Zed
+  -> harmony-extension (WASM)
+     -> context server configuration
+     -> /harmony-pulse
+     -> /harmony-sync
+  -> harmony-mcp (native sidecar over stdio MCP)
+     -> tool routing
+     -> sync command
+     -> doctor and pulse commands
+     -> shared tracking logic
+  -> harmony-core / harmony-memory / harmony-analyzer
+     -> overlap detection
+     -> persistence
+     -> impact analysis
 ```
 
-### Why a native sidecar?
+### Why a native sidecar exists
 
-WASM (used by Zed extensions) **cannot**:
-- Access SQLite databases
-- Run embedding models (ONNX runtime)
-- Parse code with Tree-sitter
-- Spawn LSP servers
+The extension runs as WASM, while Harmony still needs native capabilities such as:
 
-So all heavy computation runs in a native Rust binary (`harmony-mcp`) that the WASM extension communicates with via JSON-RPC over stdin/stdout.
+- SQLite access
+- local file scanning for sync
+- Tree-sitter analysis
+- richer project bootstrap logic
 
----
-
-## The 5 Crates
-
-| Crate | Type | Purpose |
-|-------|------|---------|
-| `harmony-core` | Library | Shared data models, overlap detection, shadow diffing, negotiation prompts, config loader, sandbox executor |
-| `harmony-memory` | Library | SQLite persistence (all CRUD ops), embedding engine for semantic memory search |
-| `harmony-analyzer` | Library | Tree-sitter code parsing, LSP client, impact analysis engine |
-| `harmony-mcp` | Binary | Native sidecar — MCP server exposing tools over JSON-RPC stdio |
-| `harmony-extension` | cdylib | WASM extension for Zed — panels, ghost highlights, sidecar lifecycle |
+That work happens in `harmony-mcp`.
 
 ---
 
-## Key Concepts
+## Main Concepts
 
-### Provenance Tags
-Every code change is recorded as a `ProvenanceTag` containing:
-- **Who**: Actor ID (`human:awanish` or `agent:architect-01`)
-- **What**: Unified diff of the change
-- **Where**: File path + specific line range (TextRange)
-- **When**: Timestamp
-- **Why**: Task prompt that motivated the change
+### Provenance tags
 
-### Overlap Detection
-When a new change is reported, Harmony checks all recent tags for the same file and detects overlaps based on 4 rules:
-1. Same file path
-2. Different actors (same actor can't conflict with itself)
-3. Overlapping line regions
-4. Within time window (default: 30 minutes)
+A provenance tag records:
 
-### Shadow Mode
-Agents work in **shadow mode** by default — their edits are stored privately and rendered as translucent "ghost highlights" in the editor. The actual file is never modified until the human explicitly accepts the change. This prevents agents from accidentally breaking a file while the human is editing it.
+- actor id, such as `human:water` or `agent:copilot`
+- file path
+- line range
+- timestamp
+- unified diff
+- optional task prompt
 
-### Impact Analysis
-When an overlap is detected, Harmony runs:
-1. **Tree-sitter AST analysis** — extracts affected symbols (functions, classes, imports) from both changes
-2. **LSP reference lookup** (optional) — finds callers of modified functions
-3. **Complexity scoring** — Simple / Moderate / Complex classification
-4. **Impact summary** — Human-readable explanation (e.g., "You modified `validateJWT`. Agent Architect added Redis cache in the same function.")
+### Overlap detection
 
-### Negotiation
-For complex overlaps, Harmony can call an LLM to produce a merged diff that preserves the intent of both changes. The LLM receives the two conflicting diffs, the impact analysis, and relevant team memory, then produces a unified diff with rationale.
+Harmony checks whether two recent changes:
 
-### Team Memory
-Harmony maintains a SQLite-backed "team memory" — structured notes about decisions, rejections, and context. Memory records are embedded using a keyword-frequency hash (or neural embeddings with `fastembed`) and retrieved by cosine similarity. Agents can query memory via MCP tools to avoid repeating past mistakes.
+1. target the same file
+2. come from different actors
+3. touch overlapping lines
+4. fall inside the configured overlap window
+
+### Project-local memory
+
+Harmony stores all of this in `.harmony\memory.db` inside the tracked project.
+
+That means Harmony follows the project, not the editor installation.
 
 ---
 
-## Configuration
+## Current User-Facing Surfaces
 
-Config lives at `.harmony/config.toml` in your project root. Auto-created with sensible defaults on first run.
+### Zed slash commands
 
-```toml
-[general]
-overlap_window_minutes = 30
+- `/harmony-pulse`
+- `/harmony-sync`
 
-[human]
-username = "awanish"
+### MCP tools
 
-[analysis]
-lsp_mode = "auto"
-sandbox_mode = "complex_only"
+- `harmony_pulse`
+- `report_file_edit`
+- `report_change`
+- `query_memory`
+- `add_memory`
+- `list_decisions`
 
-[memory]
-embedding_model = "bge-small-en-v1.5"
+### Native CLI
 
-[negotiation]
-negotiation_backend = "agent"
-
-[ui]
-ghost_add_color = "#7ee8a280"
-ghost_remove_color = "#f0606060"
-```
-
-See the [full config reference](../HARMONY_IMPL_SPEC.md#14-config-file-format) for all options.
+- `harmony-mcp serve`
+- `harmony-mcp doctor`
+- `harmony-mcp pulse`
+- `harmony-mcp sync`
 
 ---
 
-## What Harmony Does NOT Do
+## What Harmony Does Well Right Now
 
-- ❌ Replace git (provenance is tracked in SQLite, not git objects)
-- ❌ Cloud sync (100% local in v0.1)
-- ❌ Chat interface (task assignment is a single prompt per agent)
-- ❌ Swarm AI (agents work independently; "negotiation" is a single LLM call)
-- ❌ Windows support for IPC (Unix socket only; TCP fallback planned for v0.2)
-- ❌ Languages beyond TypeScript, JavaScript, Rust (Tree-sitter grammars for these 3 only)
+- starts cleanly from Zed as a context server
+- chooses the correct project-local database
+- shows project/database status through Pulse
+- records assistant-side edits through `report_file_edit` or `sync`
+- detects real overlaps once both sides of the change are reported
 
 ---
 
-## License
+## What Is Still In Progress
 
-MIT — Awanish Maurya · XPWNIT LAB · 2026
+These ideas exist in the repository, but they are not the primary verified user path yet:
+
+- live extension panels
+- automatic ghost highlights in the editor
+- zero-click assistant edit capture
+- rich extension-side IPC-driven UI
+
+The current docs and workflows should treat those as future-facing or scaffolded, not as the main shipped path.
+
+---
+
+## What Harmony Does Not Try To Be
+
+- not a git replacement
+- not a cloud sync service
+- not a general-purpose chat app
+- not a full autonomous swarm orchestrator
+
+Harmony is a local collaboration safety layer for code edits.
+
+---
+
+## Repository Layout
+
+| Path | Purpose |
+|------|---------|
+| `crates/harmony-core` | shared models and algorithms |
+| `crates/harmony-memory` | SQLite store and memory retrieval |
+| `crates/harmony-analyzer` | Tree-sitter and impact analysis |
+| `crates/harmony-mcp` | native sidecar and CLI |
+| `crates/harmony-extension` | Zed extension |
+| `docs` | user and implementation docs |
+
+---
+
+*Last updated: 2026-04-07*

@@ -112,6 +112,8 @@ fn human_edit() -> (String, ProvenanceTag) {
     let tag = ProvenanceTag {
         id: Uuid::new_v4(),
         actor_id: ActorId("human:awanish".to_string()),
+        machine_name: "Awanish".to_string(),
+        machine_ip: "192.168.1.10".to_string(),
         actor_kind: ActorKind::Human,
         task_id: None,
         task_prompt: Some("Improve auth error messages".to_string()),
@@ -142,6 +144,8 @@ fn agent_edit() -> (String, ProvenanceTag) {
     let tag = ProvenanceTag {
         id: Uuid::new_v4(),
         actor_id: ActorId("agent:architect-01".to_string()),
+        machine_name: "Rahul".to_string(),
+        machine_ip: "192.168.1.22".to_string(),
         actor_kind: ActorKind::Agent,
         task_id: Some(Uuid::new_v4()),
         task_prompt: Some("Add Redis caching to JWT validation for performance".to_string()),

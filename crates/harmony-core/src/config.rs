@@ -16,6 +16,9 @@ pub struct HarmonyConfig {
     #[serde(default = "HumanConfig::default")]
     pub human: HumanConfig,
 
+    #[serde(default = "NetworkConfig::default")]
+    pub network: NetworkConfig,
+
     #[serde(default = "AnalysisConfig::default")]
     pub analysis: AnalysisConfig,
 
@@ -51,6 +54,24 @@ pub struct HumanConfig {
 
     #[serde(default = "default_actor_id")]
     pub actor_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    #[serde(default = "default_network_mode")]
+    pub mode: String,
+
+    #[serde(default = "default_mcp_port")]
+    pub mcp_port: u16,
+
+    #[serde(default = "default_ipc_port")]
+    pub ipc_port: u16,
+
+    #[serde(default = "default_web_port")]
+    pub web_port: u16,
+
+    #[serde(default)]
+    pub host_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +147,7 @@ impl Default for HarmonyConfig {
         Self {
             general: GeneralConfig::default(),
             human: HumanConfig::default(),
+            network: NetworkConfig::default(),
             analysis: AnalysisConfig::default(),
             memory: MemoryConfig::default(),
             negotiation: NegotiationConfig::default(),
@@ -161,6 +183,18 @@ impl Default for AnalysisConfig {
             lsp_mode: "auto".into(),
             sandbox_mode: "complex_only".into(),
             sandbox_timeout_seconds: 60,
+        }
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            mode: "host".into(),
+            mcp_port: 4231,
+            ipc_port: 4232,
+            web_port: 4233,
+            host_url: None,
         }
     }
 }
@@ -212,6 +246,10 @@ fn default_overlap_window() -> u32 { 30 }
 fn default_max_recent_tags() -> u32 { 500 }
 fn default_username() -> String { "developer".into() }
 fn default_actor_id() -> String { "human:developer".into() }
+fn default_network_mode() -> String { "host".into() }
+fn default_mcp_port() -> u16 { 4231 }
+fn default_ipc_port() -> u16 { 4232 }
+fn default_web_port() -> u16 { 4233 }
 fn default_true() -> bool { true }
 fn default_lsp_mode() -> String { "auto".into() }
 fn default_sandbox_mode() -> String { "complex_only".into() }
@@ -283,6 +321,19 @@ max_recent_tags = 500
 # Display name for the human participant
 username = "{username}"
 actor_id = "human:{username}"
+
+[network]
+# "host" runs the shared Harmony network servers on this machine.
+# "client" connects local Harmony tooling to another host's MCP server.
+mode = "host"
+
+# Ports used when running in host mode.
+mcp_port = 4231
+ipc_port = 4232
+web_port = 4233
+
+# In client mode, point this to the host machine's MCP base URL.
+# host_url = "http://192.168.1.10:4231"
 
 [analysis]
 # Tree-sitter analysis always enabled
@@ -389,6 +440,8 @@ mod tests {
         assert_eq!(config.analysis.lsp_mode, "auto");
         assert_eq!(config.negotiation.negotiation_backend, "agent");
         assert_eq!(config.ui.ghost_add_color, "#7ee8a280");
+        assert_eq!(config.network.mode, "host");
+        assert_eq!(config.network.mcp_port, 4231);
         assert_eq!(config.agents.registry.len(), 2);
     }
 
@@ -425,10 +478,18 @@ mod tests {
         std::fs::write(&path, r#"
 [human]
 username = "awanish"
+
+[network]
+host_url = "http://192.168.1.10:4231"
 "#).unwrap();
 
         let config = HarmonyConfig::load_from_path(&path).unwrap();
         assert_eq!(config.human.username, "awanish");
+        assert_eq!(config.network.mode, "host");
+        assert_eq!(
+            config.network.host_url.as_deref(),
+            Some("http://192.168.1.10:4231")
+        );
         // Everything else should be default
         assert_eq!(config.general.overlap_window_minutes, 30);
         assert_eq!(config.analysis.lsp_mode, "auto");
